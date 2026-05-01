@@ -551,9 +551,9 @@ function evaluate(node) {
     return union(evaluate(node.left), evaluate(node.right));
   }
   if (node.type === 'NOT') {
-    const leftSet = evaluate(node.left);
-    if (leftSet.size === 0) return new Set();
-    return difference(leftSet, evaluate(node.right));
+    const allIds = getAllFileIds();
+    const excludeSet = evaluate(node.operand);
+    return difference(allIds, excludeSet);
   }
   return new Set();
 }
