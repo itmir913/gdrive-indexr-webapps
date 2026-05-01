@@ -38,8 +38,8 @@ https://drive.google.com/drive/folders/[여기가 ID]
 ### 3단계 — Apps Script 프로젝트 생성 및 코드 붙여넣기
 
 1. 스프레드시트 메뉴 → **확장 프로그램 → Apps Script** 를 엽니다.
-2. 기본 `Code.gs` 내용을 모두 지우고 이 저장소의 `Code.gs` 파일 내용을 붙여넣습니다.
-3. `+` 버튼으로 HTML 파일을 추가하고 이름을 **`index`** 로 지정한 뒤 `index.html` 내용을 붙여넣습니다.
+2. 기본 `Code.gs` 내용을 모두 지우고 이 저장소의 `src/Code.gs` 파일 내용을 붙여넣습니다.
+3. `+` 버튼으로 HTML 파일을 추가하고 이름을 **`index`** 로 지정한 뒤 `src/index.html` 내용을 붙여넣습니다.
 
 ### 4단계 — 상수 값 교체
 

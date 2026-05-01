@@ -5,7 +5,7 @@ const INDEX_SHEET_ID      = 'your_spreadsheet_id';
 const FILE_INDEX_SHEET    = 'FileIndex';   // 파일 메타데이터 인덱스 시트 이름
 const KEYWORD_LOG_SHEET   = 'KeywordLog';  // 키워드 빈도 로그 시트 이름
 const CACHE_TTL           = 21600;         // 6시간 (Google 하드 리밋)
-const PRECACHE_TOP_N      = 100;        // warmCache 사전 워밍 대상 상위 N개; 나머지는 첫 검색 시 온디맨드 캐싱
+const PRECACHE_TOP_N      = 100;           // warmCache 사전 워밍 대상 상위 N개; 나머지는 첫 검색 시 온디맨드 캐싱
 const DRIVE_SERVICE       = Drive;         // Apps Script 서비스 식별자 (편집기 → 서비스 → 식별자)
 
 // ── 진입점 ───────────────────────────────────────────────────────────────────
@@ -39,7 +39,7 @@ function doSearch(query) {
   }
 }
 
-// ── 키워드 빈도 로그 (Sheet2) ────────────────────────────────────────────────
+// ── 키워드 빈도 로그 (KEYWORD_LOG_SHEET) ────────────────────────────────────────────────
 function logKeywords(keywords) {
   if (!keywords || keywords.length === 0) return;
 
@@ -137,7 +137,7 @@ function driveFullTextSearch(keyword) {
   return ids;
 }
 
-// ── fileId 배열 → 메타데이터 조회 (Sheet1) ──────────────────────────────────
+// ── fileId 배열 → 메타데이터 조회 (FILE_INDEX_SHEET) ──────────────────────────────────
 function lookupMetadata(fileIds) {
   const ss    = SpreadsheetApp.openById(INDEX_SHEET_ID);
   const sheet = ss.getSheetByName(FILE_INDEX_SHEET);
