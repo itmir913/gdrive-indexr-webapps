@@ -1,10 +1,11 @@
 // ── 상수 ────────────────────────────────────────────────────────────────────
 const FOLDER_ID           = 'your_root_folder_id';
 const INDEX_SHEET_ID      = 'your_spreadsheet_id';
+
 const FILE_INDEX_SHEET    = 'FileIndex';   // 파일 메타데이터 인덱스 시트 이름
 const KEYWORD_LOG_SHEET   = 'KeywordLog';  // 키워드 빈도 로그 시트 이름
 const CACHE_TTL           = 21600;         // 6시간 (Google 하드 리밋)
-const PRECACHE_TOP_N      = 30;
+const PRECACHE_TOP_N      = 100;        // warmCache 사전 워밍 대상 상위 N개; 나머지는 첫 검색 시 온디맨드 캐싱
 const DRIVE_SERVICE       = Drive;         // Apps Script 서비스 식별자 (편집기 → 서비스 → 식별자)
 
 // ── 진입점 ───────────────────────────────────────────────────────────────────
@@ -213,8 +214,11 @@ function warmCache() {
 
   const data = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
 
-  // count 내림차순 정렬
-  data.sort((a, b) => parseInt(b[1], 10) - parseInt(a[1], 10));
+  // 1순위: 검색횟수 내림차순, 2순위: 최근 검색일 내림차순 (동점 처리)
+  data.sort((a, b) =>
+    parseInt(b[1], 10) - parseInt(a[1], 10) ||
+    new Date(b[2]) - new Date(a[2])
+  );
 
   const topN  = data.slice(0, PRECACHE_TOP_N);
   const cache = CacheService.getScriptCache();
@@ -232,6 +236,26 @@ function warmCache() {
   Logger.log('warmCache 완료');
 }
 
+// ── 만료 키워드 정리 (매일 03:00 트리거) ────────────────────────────────────
+function purgeStaleKeywords() {
+  const ss    = SpreadsheetApp.openById(INDEX_SHEET_ID);
+  const sheet = ss.getSheetByName(KEYWORD_LOG_SHEET);
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 30); // 30일 이상 미검색 키워드 삭제
+
+  const data = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
+  const kept = data.filter(row => row[0] && new Date(row[2]) >= cutoff);
+
+  sheet.getRange(2, 1, lastRow - 1, 3).clearContent();
+  if (kept.length > 0) {
+    sheet.getRange(2, 1, kept.length, 3).setValues(kept);
+  }
+  Logger.log('purgeStaleKeywords: ' + (data.length - kept.length) + '개 삭제, ' + kept.length + '개 유지');
+}
+
 // ── 트리거 설치 (수동 1회 실행) ──────────────────────────────────────────────
 function setupTriggers() {
   // 기존 트리거 전체 삭제 (중복 방지)
@@ -242,8 +266,9 @@ function setupTriggers() {
   ScriptApp.newTrigger('warmCache').timeBased().atHour(7).nearMinute(30).everyDays(1).create();
   ScriptApp.newTrigger('warmCache').timeBased().atHour(12).nearMinute(30).everyDays(1).create();
   ScriptApp.newTrigger('warmCache').timeBased().atHour(17).nearMinute(30).everyDays(1).create();
+  ScriptApp.newTrigger('purgeStaleKeywords').timeBased().atHour(3).nearMinute(0).everyDays(1).create();
 
-  Logger.log('트리거 5개 설치 완료');
+  Logger.log('트리거 6개 설치 완료');
 }
 
 // ── Boolean 쿼리 파서 ────────────────────────────────────────────────────────
