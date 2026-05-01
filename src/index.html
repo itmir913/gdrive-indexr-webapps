@@ -99,7 +99,8 @@
       font-weight: 700;
       padding: 2px 8px;
       border-radius: 6px;
-      word-break: keep-all;
+      white-space: nowrap;
+      display: inline-block;
     }
     .guide-desc {
       color: var(--text-sub);
@@ -206,23 +207,27 @@
   <div id="status"></div>
   <div id="results">
     <div class="guide-box">
-      <div class="guide-title">💡 더 정확하게 검색하는 방법</div>
+      <div class="guide-title">💡 검색 조건을 설정하여 원하는 자료를 더 정확하게 검색하는 방법</div>
       <ul class="guide-list">
         <li>
-          <span class="code-tag">예체능 서울</span>
-          <span class="guide-desc"><b>(AND)</b> 두 단어가 모두 포함된 문서를 찾습니다. (띄어쓰기)</span>
+          <span class="code-tag">2027 수시 요강</span>
+          <span class="guide-desc"><b>(AND)</b> 단어 사이에 공백을 두면 <b>모든 단어가 포함</b>된 문서만 찾습니다.<br>
+            (예: '2027', '수시', '요강'이 모두 포함된 문서만 검색)</span>
         </li>
         <li>
-          <span class="code-tag">수학 OR 영어</span>
-          <span class="guide-desc"><b>(OR)</b> 두 단어 중 하나라도 포함된 문서를 찾습니다.</span>
+          <span class="code-tag">논술 OR 면접</span>
+          <span class="guide-desc"><b>(OR)</b> 두 키워드 중에서 <b>하나라도 포함</b>된 문서를 찾습니다.<br>
+            (예: '논술'이 포함되어 있거나, '면접'이 포함된 문서 검색)</span>
         </li>
         <li>
-          <span class="code-tag">수학 NOT 서울</span>
-          <span class="guide-desc"><b>(NOT)</b> '수학'은 포함하지만 '서울'은 제외합니다.</span>
+          <span class="code-tag">학생부 NOT 교과</span>
+          <span class="guide-desc"><b>(NOT)</b> 앞의 단어는 포함하되, <b>NOT 뒤의 단어가 포함된 문서는 결과에서 제외</b>합니다.<br>
+            (예: '학생부'를 포함하고, '교과'가 포함되지 않은 문서 검색</span>
         </li>
         <li>
-          <span class="code-tag">(수학 OR 영어) NOT 서울</span>
-          <span class="guide-desc"><b>(괄호)</b> 괄호를 사용하여 우선순위를 지정할 수 있습니다.</span>
+          <span class="code-tag">(기출 OR 모의고사) NOT 해설</span>
+          <span class="guide-desc"><b>(괄호)</b> 복잡한 조건도 우선순위를 정해 검색할 수 있습니다.<br>
+            (예: '기출'이나 '모의고사'를 포함하고, '해설지'는 제외)</span>
         </li>
       </ul>
     </div>
