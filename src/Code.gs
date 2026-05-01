@@ -9,6 +9,100 @@ const CACHE_TTL           = 21600;         // 6시간 (Google 하드 리밋)
 const PRECACHE_TOP_N      = 100;           // warmCache 사전 워밍 대상 상위 N개; 나머지는 첫 검색 시 온디맨드 캐싱
 const DRIVE_SERVICE       = Drive;         // Apps Script 서비스 식별자 (편집기 → 서비스 → 식별자)
 
+// ── 메타데이터 인덱스 재빌드 (매일 02:00 트리거 / 시간 초과 방지 / 이어하기 지원) ───
+function rebuildMetadataIndex() {
+  const MAX_EXECUTION_TIME = 4 * 60 * 1000; // 4분 (안전하게 설정)
+  const startTime = Date.now();
+  const props = PropertiesService.getScriptProperties();
+
+  const ss = SpreadsheetApp.openById(INDEX_SHEET_ID);
+  const sheet = ss.getSheetByName(FILE_INDEX_SHEET);
+
+  // 진행 상태(대기열) 불러오기
+  let queueStr = props.getProperty('FOLDER_QUEUE');
+  let folderQueue = queueStr ? JSON.parse(queueStr) : null;
+
+  // 처음 실행되는 경우 (대기열이 없을 때)
+  if (!folderQueue) {
+    folderQueue = [{ id: FOLDER_ID, path: '' }];
+
+    // 기존 데이터 초기화 및 헤더 작성
+    if (sheet.getLastRow() >= 2) {
+      sheet.getRange(2, 1, sheet.getLastRow() - 1, 5).clearContent();
+    }
+    sheet.getRange(1, 1, 1, 5).setValues([['fileId', '파일명', '폴더경로', 'URL', '수정일']]);
+
+    deleteTempTriggers();
+  }
+
+  let rows = [];
+
+  while (folderQueue.length > 0) {
+    // 1. 실행 시간이 4분을 초과했는지 확인
+    if (Date.now() - startTime > MAX_EXECUTION_TIME) {
+      props.setProperty('FOLDER_QUEUE', JSON.stringify(folderQueue)); // 남은 폴더 저장
+      if (rows.length > 0) {
+        sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 5).setValues(rows);
+      }
+      // 1분 뒤 이어하기 트리거 생성
+      ScriptApp.newTrigger('continueIndexing').timeBased().after(60 * 1000).create();
+      Logger.log(`[시간 초과 방지] 남은 폴더: ${folderQueue.length}개. 1분 뒤 이어하기 실행.`);
+      return;
+    }
+
+    // 2. 폴더 탐색
+    const current = folderQueue.shift();
+    try {
+      const folder = DriveApp.getFolderById(current.id);
+      const currentPath = current.path ? current.path + '/' + folder.getName() : folder.getName();
+      const files = folder.getFiles();
+
+      while (files.hasNext()) {
+        const f = files.next();
+        rows.push([
+          f.getId(), f.getName(), currentPath, f.getUrl(),
+          Utilities.formatDate(f.getLastUpdated(), Session.getScriptTimeZone(), 'yyyy-MM-dd')
+        ]);
+
+        if (rows.length >= 500) {
+          sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 5).setValues(rows);
+          rows = [];
+        }
+      }
+
+      const subfolders = folder.getFolders();
+      while (subfolders.hasNext()) {
+        folderQueue.push({ id: subfolders.next().getId(), path: currentPath });
+      }
+    } catch (e) {
+      Logger.log(`폴더 접근 오류 [${current.id}]: ${e.message}`);
+    }
+  }
+
+  // 3. 탐색 완료
+  if (rows.length > 0) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 5).setValues(rows);
+  }
+  props.deleteProperty('FOLDER_QUEUE');
+  deleteTempTriggers();
+  Logger.log('🎉 인덱싱 완료!');
+}
+
+// ── 트리거 설치 (수동 1회 실행) ──────────────────────────────────────────────
+function setupTriggers() {
+  // 기존 트리거 전체 삭제 (중복 방지)
+  ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
+
+  ScriptApp.newTrigger('rebuildMetadataIndex').timeBased().atHour(2).nearMinute(0).everyDays(1).create();
+  ScriptApp.newTrigger('warmCache').timeBased().atHour(2).nearMinute(30).everyDays(1).create();
+  ScriptApp.newTrigger('warmCache').timeBased().atHour(7).nearMinute(30).everyDays(1).create();
+  ScriptApp.newTrigger('warmCache').timeBased().atHour(12).nearMinute(30).everyDays(1).create();
+  ScriptApp.newTrigger('warmCache').timeBased().atHour(17).nearMinute(30).everyDays(1).create();
+  ScriptApp.newTrigger('purgeStaleKeywords').timeBased().atHour(3).nearMinute(0).everyDays(1).create();
+
+  Logger.log('트리거 6개 설치 완료');
+}
+
 // ── 진입점 ───────────────────────────────────────────────────────────────────
 function doGet(e) {
   return HtmlService.createHtmlOutputFromFile('index')
@@ -192,85 +286,6 @@ function lookupMetadata(fileIds) {
   return results;
 }
 
-// ── 메타데이터 인덱스 재빌드 (매일 02:00 트리거 / 시간 초과 방지 / 이어하기 지원) ───
-function rebuildMetadataIndex() {
-  const MAX_EXECUTION_TIME = 4 * 60 * 1000; // 4분 (안전하게 설정)
-  const startTime = Date.now();
-  const props = PropertiesService.getScriptProperties();
-
-  const ss = SpreadsheetApp.openById(INDEX_SHEET_ID);
-  const sheet = ss.getSheetByName(FILE_INDEX_SHEET);
-
-  // 진행 상태(대기열) 불러오기
-  let queueStr = props.getProperty('FOLDER_QUEUE');
-  let folderQueue = queueStr ? JSON.parse(queueStr) : null;
-
-  // 처음 실행되는 경우 (대기열이 없을 때)
-  if (!folderQueue) {
-    folderQueue = [{ id: FOLDER_ID, path: '' }];
-
-    // 기존 데이터 초기화 및 헤더 작성
-    if (sheet.getLastRow() >= 2) {
-      sheet.getRange(2, 1, sheet.getLastRow() - 1, 5).clearContent();
-    }
-    sheet.getRange(1, 1, 1, 5).setValues([['fileId', '파일명', '폴더경로', 'URL', '수정일']]);
-
-    deleteTempTriggers();
-  }
-
-  let rows = [];
-
-  while (folderQueue.length > 0) {
-    // 1. 실행 시간이 4분을 초과했는지 확인
-    if (Date.now() - startTime > MAX_EXECUTION_TIME) {
-      props.setProperty('FOLDER_QUEUE', JSON.stringify(folderQueue)); // 남은 폴더 저장
-      if (rows.length > 0) {
-        sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 5).setValues(rows);
-      }
-      // 1분 뒤 이어하기 트리거 생성
-      ScriptApp.newTrigger('continueIndexing').timeBased().after(60 * 1000).create();
-      Logger.log(`[시간 초과 방지] 남은 폴더: ${folderQueue.length}개. 1분 뒤 이어하기 실행.`);
-      return;
-    }
-
-    // 2. 폴더 탐색
-    const current = folderQueue.shift();
-    try {
-      const folder = DriveApp.getFolderById(current.id);
-      const currentPath = current.path ? current.path + '/' + folder.getName() : folder.getName();
-      const files = folder.getFiles();
-
-      while (files.hasNext()) {
-        const f = files.next();
-        rows.push([
-          f.getId(), f.getName(), currentPath, f.getUrl(),
-          Utilities.formatDate(f.getLastUpdated(), Session.getScriptTimeZone(), 'yyyy-MM-dd')
-        ]);
-
-        if (rows.length >= 500) {
-          sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 5).setValues(rows);
-          rows = [];
-        }
-      }
-
-      const subfolders = folder.getFolders();
-      while (subfolders.hasNext()) {
-        folderQueue.push({ id: subfolders.next().getId(), path: currentPath });
-      }
-    } catch (e) {
-      Logger.log(`폴더 접근 오류 [${current.id}]: ${e.message}`);
-    }
-  }
-
-  // 3. 탐색 완료
-  if (rows.length > 0) {
-    sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 5).setValues(rows);
-  }
-  props.deleteProperty('FOLDER_QUEUE');
-  deleteTempTriggers();
-  Logger.log('🎉 인덱싱 완료!');
-}
-
 // ── 이어하기 헬퍼 함수 ──────────────────────────────────────────────────────
 function continueIndexing() {
   rebuildMetadataIndex();
@@ -358,21 +373,6 @@ function purgeStaleKeywords() {
     sheet.getRange(2, 1, kept.length, 3).setValues(kept);
   }
   Logger.log('purgeStaleKeywords: ' + (data.length - kept.length) + '개 삭제, ' + kept.length + '개 유지');
-}
-
-// ── 트리거 설치 (수동 1회 실행) ──────────────────────────────────────────────
-function setupTriggers() {
-  // 기존 트리거 전체 삭제 (중복 방지)
-  ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
-
-  ScriptApp.newTrigger('rebuildMetadataIndex').timeBased().atHour(2).nearMinute(0).everyDays(1).create();
-  ScriptApp.newTrigger('warmCache').timeBased().atHour(2).nearMinute(30).everyDays(1).create();
-  ScriptApp.newTrigger('warmCache').timeBased().atHour(7).nearMinute(30).everyDays(1).create();
-  ScriptApp.newTrigger('warmCache').timeBased().atHour(12).nearMinute(30).everyDays(1).create();
-  ScriptApp.newTrigger('warmCache').timeBased().atHour(17).nearMinute(30).everyDays(1).create();
-  ScriptApp.newTrigger('purgeStaleKeywords').timeBased().atHour(3).nearMinute(0).everyDays(1).create();
-
-  Logger.log('트리거 6개 설치 완료');
 }
 
 // ── 관리자 비밀번호 확인 후 인덱스 재빌드 실행 ───────────────────────────────────
