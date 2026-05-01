@@ -472,7 +472,7 @@ function purgeStaleKeywords() {
     if (lastRow < 2) return;
 
     const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - 7); // 7일 이상 미검색 키워드 삭제
+    cutoff.setDate(cutoff.getDate() - 3); // 3일 이상 미검색 키워드 삭제
 
     const data = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
     const kept = data.filter(row => row[0] && new Date(row[2]) >= cutoff);
