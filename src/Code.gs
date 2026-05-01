@@ -113,7 +113,7 @@ function getFileIdsForKeyword(keyword) {
 function driveFullTextSearch(keyword) {
   // Advanced Drive Service (Drive API v3) 필요
   // Apps Script 편집기 → 서비스 → Drive API v3 추가
-  const q   = `fullText contains '${keyword}' and mimeType='application/pdf' and trashed=false`;
+  const q   = `fullText contains '${keyword}' and trashed=false`;
   const opt = {
     q                    : q,
     fields               : 'nextPageToken, files(id)',
@@ -185,7 +185,7 @@ function getAllFilesRecursive(folderId, pathPrefix) {
   const currentPath = pathPrefix ? pathPrefix + '/' + folder.getName() : folder.getName();
   let   rows        = [];
 
-  const files = folder.getFilesByType(MimeType.PDF);
+  const files = folder.getFiles();
   while (files.hasNext()) {
     const f = files.next();
     rows.push([
