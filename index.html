@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>입시자료 통합검색 시스템</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f8f9fa;
+      color: #212529;
+      padding: 1.5rem 1rem;
+      overflow-y: scroll;
+    }
+
+    .container {
+      max-width: 720px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      margin-bottom: 1.5rem;
+      color: #1a73e8;
+    }
+
+    /* ── 검색 영역 ── */
+    .search-area {
+      background: #fff;
+      border: 1px solid #dadce0;
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    #searchInput {
+      flex: 1;
+      font-size: 1rem;
+      padding: 0.5rem 0.75rem;
+      border: 1px solid #dadce0;
+      border-radius: 4px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    #searchInput:focus {
+      border-color: #1a73e8;
+    }
+
+    #searchBtn {
+      padding: 0.5rem 1.25rem;
+      background: #1a73e8;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      font-size: 0.95rem;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s;
+    }
+
+    #searchBtn:hover  { background: #1558b0; }
+    #searchBtn:disabled { background: #a8c7fa; cursor: default; }
+
+    /* ── 연산자 힌트 버튼 ── */
+    .operator-hints {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      align-items: center;
+      margin-top: 0.65rem;
+    }
+
+    .operator-hints span {
+      font-size: 0.8rem;
+      color: #5f6368;
+    }
+
+    .op-btn {
+      font-size: 0.78rem;
+      padding: 0.2rem 0.6rem;
+      border: 1px solid #dadce0;
+      border-radius: 12px;
+      background: #f1f3f4;
+      color: #3c4043;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+
+    .op-btn:hover { background: #e8eaed; }
+
+    /* ── 개인정보 안내 ── */
+    .privacy-notice {
+      font-size: 0.75rem;
+      color: #80868b;
+      font-style: italic;
+      margin-top: 0.65rem;
+    }
+
+    /* ── 상태 / 스피너 ── */
+    #status {
+      min-height: 2rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+      font-size: 0.9rem;
+      color: #5f6368;
+    }
+
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border: 2px solid #dadce0;
+      border-top-color: #1a73e8;
+      border-radius: 50%;
+      animation: spin 0.75s linear infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── 결과 목록 ── */
+    .result-item {
+      background: #fff;
+      border: 1px solid #dadce0;
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+      margin-bottom: 0.6rem;
+    }
+
+    .result-name {
+      font-weight: 600;
+      font-size: 0.95rem;
+      margin-bottom: 0.35rem;
+      word-break: break-all;
+    }
+
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.3rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .tag {
+      display: inline-block;
+      background: #e8f0fe;
+      color: #1a73e8;
+      font-size: 0.75rem;
+      padding: 0.15rem 0.5rem;
+      border-radius: 10px;
+    }
+
+    .drive-link {
+      font-size: 0.82rem;
+      color: #1a73e8;
+      text-decoration: none;
+    }
+
+    .drive-link:hover { text-decoration: underline; }
+
+    .no-result {
+      color: #5f6368;
+      font-size: 0.9rem;
+      padding: 0.5rem 0;
+    }
+
+    .error-msg {
+      color: #d93025;
+      font-size: 0.9rem;
+      padding: 0.5rem 0;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>입시자료 통합검색</h1>
+
+  <div class="search-area">
+    <div class="input-row">
+      <input id="searchInput" type="text"
+             placeholder="키워드를 입력하세요 (공백=AND)">
+      <button id="searchBtn" onclick="runSearch()">검색</button>
+    </div>
+
+    <div class="operator-hints">
+      <span>연산자:</span>
+      <button class="op-btn" onclick="appendOp(' AND ')">AND</button>
+      <button class="op-btn" onclick="appendOp(' OR ')">OR</button>
+      <button class="op-btn" onclick="appendOp(' NOT ')">NOT</button>
+      <button class="op-btn" onclick="appendOp('(')">&#40;</button>
+      <button class="op-btn" onclick="appendOp(')')">&#41;</button>
+    </div>
+
+    <p class="privacy-notice">검색어는 서비스 개선을 위해 익명으로 수집됩니다</p>
+  </div>
+
+  <div id="status"></div>
+  <div id="results"></div>
+</div>
+
+<script>
+  var searchInput = document.getElementById('searchInput');
+  var searchBtn   = document.getElementById('searchBtn');
+  var statusDiv   = document.getElementById('status');
+  var resultsDiv  = document.getElementById('results');
+
+  searchInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') runSearch();
+  });
+
+  function appendOp(op) {
+    searchInput.value += op;
+    searchInput.focus();
+  }
+
+  function runSearch() {
+    var query = searchInput.value.trim();
+    if (!query) {
+      statusDiv.innerHTML = '<span>검색어를 입력하세요.</span>';
+      resultsDiv.innerHTML = '';
+      return;
+    }
+
+    searchBtn.disabled = true;
+    statusDiv.innerHTML = '<div class="spinner"></div><span>검색 중...</span>';
+    resultsDiv.innerHTML = '';
+
+    google.script.run
+      .withSuccessHandler(displayResults)
+      .withFailureHandler(handleError)
+      .doSearch(query);
+  }
+
+  function displayResults(results) {
+    searchBtn.disabled = false;
+    statusDiv.innerHTML = '';
+
+    if (!results || results.length === 0) {
+      resultsDiv.innerHTML = '<p class="no-result">검색 결과가 없습니다.</p>';
+      return;
+    }
+
+    var html = '';
+    results.forEach(function(item) {
+      var tags = (item.path || '').split('/').filter(function(s) { return s.length > 0; });
+      var tagHtml = tags.map(function(t) {
+        return '<span class="tag">' + escHtml(t) + '</span>';
+      }).join('');
+
+      html += '<div class="result-item">'
+            +   '<div class="result-name">' + escHtml(item.name) + '</div>'
+            +   '<div class="tag-row">' + tagHtml + '</div>'
+            +   '<a class="drive-link" href="' + escHtml(item.url) + '" target="_blank" rel="noopener">드라이브에서 열기 ↗</a>'
+            + '</div>';
+    });
+    resultsDiv.innerHTML = html;
+  }
+
+  function handleError(error) {
+    searchBtn.disabled = false;
+    statusDiv.innerHTML = '';
+    resultsDiv.innerHTML = '<p class="error-msg">오류가 발생했습니다. 다시 시도해 주세요.</p>';
+  }
+
+  function escHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+</script>
+</body>
+</html>

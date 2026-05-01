@@ -1,0 +1,361 @@
+// ── 상수 ────────────────────────────────────────────────────────────────────
+const FOLDER_ID           = 'your_root_folder_id';
+const INDEX_SHEET_ID      = 'your_spreadsheet_id';
+const FILE_INDEX_SHEET    = 'FileIndex';   // 파일 메타데이터 인덱스 시트 이름
+const KEYWORD_LOG_SHEET   = 'KeywordLog';  // 키워드 빈도 로그 시트 이름
+const CACHE_TTL           = 21600;         // 6시간 (Google 하드 리밋)
+const PRECACHE_TOP_N      = 30;
+const DRIVE_SERVICE       = Drive;         // Apps Script 서비스 식별자 (편집기 → 서비스 → 식별자)
+
+// ── 진입점 ───────────────────────────────────────────────────────────────────
+function doGet(e) {
+  return HtmlService.createHtmlOutputFromFile('index')
+    .setTitle('입시자료 통합검색');
+}
+
+// ── 검색 메인 (google.script.run 호출점) ────────────────────────────────────
+function doSearch(query) {
+  try {
+    query = (query || '').trim();
+    if (!query) return [];
+
+    const tokens = tokenize(query);
+
+    // 로깅용 키워드 추출 (연산자·괄호 제외)
+    const keywords = tokens
+      .filter(t => t.type === 'KEYWORD')
+      .map(t => t.value);
+    logKeywords(keywords);
+
+    const tree      = buildExpressionTree(tokens);
+    const resultSet = evaluate(tree);
+    if (resultSet.size === 0) return [];
+
+    return lookupMetadata([...resultSet]);
+  } catch (err) {
+    Logger.log('doSearch error: ' + err.message);
+    return [];
+  }
+}
+
+// ── 키워드 빈도 로그 (Sheet2) ────────────────────────────────────────────────
+function logKeywords(keywords) {
+  if (!keywords || keywords.length === 0) return;
+
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(5000);
+  } catch (e) {
+    return; // 잠금 실패 시 로깅 skip, 검색은 계속
+  }
+
+  try {
+    const ss    = SpreadsheetApp.openById(INDEX_SHEET_ID);
+    const sheet = ss.getSheetByName(KEYWORD_LOG_SHEET);
+    const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+
+    // 전체 읽기
+    const lastRow = sheet.getLastRow();
+    let rows;
+    if (lastRow < 1) {
+      rows = [['키워드', '검색횟수', '마지막검색일']];
+    } else {
+      rows = sheet.getRange(1, 1, lastRow, 3).getValues();
+    }
+
+    // 헤더가 없으면 삽입
+    if (rows[0][0] !== '키워드') {
+      rows.unshift(['키워드', '검색횟수', '마지막검색일']);
+    }
+
+    // Map 구성 (헤더 제외)
+    const keyMap = {};
+    for (let i = 1; i < rows.length; i++) {
+      keyMap[rows[i][0]] = i;
+    }
+
+    keywords.forEach(kw => {
+      if (kw in keyMap) {
+        const idx = keyMap[kw];
+        rows[idx][1] = parseInt(rows[idx][1], 10) + 1;
+        rows[idx][2] = today;
+      } else {
+        rows.push([kw, 1, today]);
+        keyMap[kw] = rows.length - 1;
+      }
+    });
+
+    sheet.clearContents();
+    sheet.getRange(1, 1, rows.length, 3).setValues(rows);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ── 키워드 → fileId 배열 (캐시 우선) ────────────────────────────────────────
+function getFileIdsForKeyword(keyword) {
+  keyword = keyword.toLowerCase().trim();
+  const cacheKey = 'kw_' + keyword;
+  const cache    = CacheService.getScriptCache();
+
+  const cached = cache.get(cacheKey);
+  if (cached !== null) {
+    return JSON.parse(cached);
+  }
+
+  const ids = driveFullTextSearch(keyword);
+  cache.put(cacheKey, JSON.stringify(ids), CACHE_TTL);
+  return ids;
+}
+
+// ── Drive fullText 검색 ──────────────────────────────────────────────────────
+function driveFullTextSearch(keyword) {
+  // Advanced Drive Service (Drive API v3) 필요
+  // Apps Script 편집기 → 서비스 → Drive API v3 추가
+  const q   = `fullText contains '${keyword}' and mimeType='application/pdf' and trashed=false`;
+  const opt = {
+    q                    : q,
+    fields               : 'nextPageToken, files(id)',
+    pageSize             : 1000,
+    supportsAllDrives    : true,
+    includeItemsFromAllDrives: true,
+  };
+
+  const ids = [];
+  try {
+    let response = DRIVE_SERVICE.Files.list(opt);
+    while (true) {
+      (response.files || []).forEach(file => ids.push(file.id));
+      if (!response.nextPageToken) break;
+      opt.pageToken = response.nextPageToken;
+      response = DRIVE_SERVICE.Files.list(opt);
+    }
+  } catch (err) {
+    Logger.log('driveFullTextSearch error [' + keyword + ']: ' + err.message);
+  }
+  return ids;
+}
+
+// ── fileId 배열 → 메타데이터 조회 (Sheet1) ──────────────────────────────────
+function lookupMetadata(fileIds) {
+  const ss    = SpreadsheetApp.openById(INDEX_SHEET_ID);
+  const sheet = ss.getSheetByName(FILE_INDEX_SHEET);
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+
+  const data = sheet.getRange(2, 1, lastRow - 1, 5).getValues();
+
+  // Map 구성: fileId → {name, path, url}
+  const map = {};
+  data.forEach(row => {
+    if (row[0]) map[row[0]] = { name: row[1], path: row[2], url: row[3] };
+  });
+
+  const results = [];
+  fileIds.forEach(id => {
+    if (map[id]) results.push(map[id]);
+  });
+  return results;
+}
+
+// ── 메타데이터 인덱스 재빌드 (매일 02:00 트리거) ────────────────────────────
+function rebuildMetadataIndex() {
+  const ss    = SpreadsheetApp.openById(INDEX_SHEET_ID);
+  const sheet = ss.getSheetByName(FILE_INDEX_SHEET);
+
+  // 헤더
+  sheet.getRange(1, 1, 1, 5).setValues([['fileId', '파일명', '폴더경로', 'URL', '수정일']]);
+
+  // 기존 데이터 행 클리어
+  if (sheet.getLastRow() >= 2) {
+    sheet.getRange(2, 1, sheet.getLastRow() - 1, 5).clearContent();
+  }
+
+  const rows = getAllFilesRecursive(FOLDER_ID, '');
+  if (rows.length > 0) {
+    sheet.getRange(2, 1, rows.length, 5).setValues(rows);
+  }
+  Logger.log('rebuildMetadataIndex: ' + rows.length + '개 파일 인덱싱 완료');
+}
+
+// ── 폴더 재귀 탐색 ──────────────────────────────────────────────────────────
+function getAllFilesRecursive(folderId, pathPrefix) {
+  const folder      = DriveApp.getFolderById(folderId);
+  const currentPath = pathPrefix ? pathPrefix + '/' + folder.getName() : folder.getName();
+  let   rows        = [];
+
+  const files = folder.getFilesByType(MimeType.PDF);
+  while (files.hasNext()) {
+    const f = files.next();
+    rows.push([
+      f.getId(),
+      f.getName(),
+      currentPath,
+      f.getUrl(),
+      Utilities.formatDate(f.getLastUpdated(), Session.getScriptTimeZone(), 'yyyy-MM-dd'),
+    ]);
+  }
+
+  const subfolders = folder.getFolders();
+  while (subfolders.hasNext()) {
+    const sub = subfolders.next();
+    rows = rows.concat(getAllFilesRecursive(sub.getId(), currentPath));
+  }
+  return rows;
+}
+
+// ── 캐시 워밍 ────────────────────────────────────────────────────────────────
+function warmCache() {
+  const ss    = SpreadsheetApp.openById(INDEX_SHEET_ID);
+  const sheet = ss.getSheetByName(KEYWORD_LOG_SHEET);
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  const data = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
+
+  // count 내림차순 정렬
+  data.sort((a, b) => parseInt(b[1], 10) - parseInt(a[1], 10));
+
+  const topN  = data.slice(0, PRECACHE_TOP_N);
+  const cache = CacheService.getScriptCache();
+
+  topN.forEach(row => {
+    const kw  = (row[0] || '').toLowerCase().trim();
+    if (!kw) return;
+    const key = 'kw_' + kw;
+    if (cache.get(key) !== null) return; // 캐시 히트 → skip
+
+    const ids = driveFullTextSearch(kw);
+    cache.put(key, JSON.stringify(ids), CACHE_TTL);
+    Utilities.sleep(200);
+  });
+  Logger.log('warmCache 완료');
+}
+
+// ── 트리거 설치 (수동 1회 실행) ──────────────────────────────────────────────
+function setupTriggers() {
+  // 기존 트리거 전체 삭제 (중복 방지)
+  ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
+
+  ScriptApp.newTrigger('rebuildMetadataIndex').timeBased().atHour(2).nearMinute(0).everyDays(1).create();
+  ScriptApp.newTrigger('warmCache').timeBased().atHour(2).nearMinute(30).everyDays(1).create();
+  ScriptApp.newTrigger('warmCache').timeBased().atHour(7).nearMinute(30).everyDays(1).create();
+  ScriptApp.newTrigger('warmCache').timeBased().atHour(12).nearMinute(30).everyDays(1).create();
+  ScriptApp.newTrigger('warmCache').timeBased().atHour(17).nearMinute(30).everyDays(1).create();
+
+  Logger.log('트리거 5개 설치 완료');
+}
+
+// ── Boolean 쿼리 파서 ────────────────────────────────────────────────────────
+
+function tokenize(query) {
+  // 괄호 앞뒤에 공백 삽입 후 분리
+  const raw = query.replace(/\(/g, ' ( ').replace(/\)/g, ' ) ').trim().split(/\s+/);
+  return raw.filter(s => s.length > 0).map(s => {
+    const upper = s.toUpperCase();
+    if (upper === 'AND')  return { type: 'AND',    value: 'AND' };
+    if (upper === 'OR')   return { type: 'OR',     value: 'OR' };
+    if (upper === 'NOT')  return { type: 'NOT',    value: 'NOT' };
+    if (upper === '(')    return { type: 'LPAREN', value: '(' };
+    if (upper === ')')    return { type: 'RPAREN', value: ')' };
+    return { type: 'KEYWORD', value: s.toLowerCase() };
+  });
+}
+
+function buildExpressionTree(tokens) {
+  let pos = 0;
+
+  function peek()    { return pos < tokens.length ? tokens[pos] : null; }
+  function consume() { return tokens[pos++]; }
+
+  function parseExpr() {
+    let left = parseTerm();
+    while (peek() && peek().type === 'OR') {
+      consume();
+      const right = parseTerm();
+      left = { type: 'OR', left, right };
+    }
+    return left;
+  }
+
+  function parseTerm() {
+    let left = parseFactor();
+    while (peek() && peek().type !== 'OR' && peek().type !== 'RPAREN') {
+      if (peek().type === 'AND') consume(); // 명시적 AND 소비
+      if (!peek() || peek().type === 'OR' || peek().type === 'RPAREN') break;
+      const right = parseFactor();
+      left = { type: 'AND', left, right };
+    }
+    return left;
+  }
+
+  function parseFactor() {
+    if (peek() && peek().type === 'NOT') {
+      consume();
+      return { type: 'NOT', operand: parseFactor() };
+    }
+    return parseAtom();
+  }
+
+  function parseAtom() {
+    const tok = peek();
+    if (!tok) return { type: 'EMPTY' };
+
+    if (tok.type === 'LPAREN') {
+      consume();
+      const node = parseExpr();
+      if (peek() && peek().type === 'RPAREN') consume();
+      return node;
+    }
+    if (tok.type === 'KEYWORD') {
+      consume();
+      return { type: 'KEYWORD', value: tok.value };
+    }
+    // 예상치 못한 토큰 (연산자만 있는 경우 등)
+    consume();
+    return { type: 'EMPTY' };
+  }
+
+  return parseExpr();
+}
+
+function evaluate(node) {
+  if (!node || node.type === 'EMPTY') return new Set();
+
+  if (node.type === 'KEYWORD') {
+    return new Set(getFileIdsForKeyword(node.value));
+  }
+  if (node.type === 'AND') {
+    return intersect(evaluate(node.left), evaluate(node.right));
+  }
+  if (node.type === 'OR') {
+    return union(evaluate(node.left), evaluate(node.right));
+  }
+  if (node.type === 'NOT') {
+    return difference(getAllFileIds(), evaluate(node.operand));
+  }
+  return new Set();
+}
+
+// ── 집합 연산 헬퍼 ───────────────────────────────────────────────────────────
+function intersect(a, b) {
+  return new Set([...a].filter(id => b.has(id)));
+}
+
+function union(a, b) {
+  return new Set([...a, ...b]);
+}
+
+function difference(a, b) {
+  return new Set([...a].filter(id => !b.has(id)));
+}
+
+function getAllFileIds() {
+  const ss    = SpreadsheetApp.openById(INDEX_SHEET_ID);
+  const sheet = ss.getSheetByName(FILE_INDEX_SHEET);
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return new Set();
+
+  const data = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  return new Set(data.map(r => r[0]).filter(id => id !== ''));
+}
