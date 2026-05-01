@@ -270,7 +270,8 @@ function getNameMatchesFromSheet(keyword) {
 function driveFullTextSearch(keyword) {
   // Advanced Drive Service (Drive API v3) 필요
   // Apps Script 편집기 → 서비스 → Drive API v3 추가
-  const q = `(name contains '${keyword}' or fullText contains '${keyword}') and trashed=false`;
+  const escaped = keyword.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const q = `(name contains '${escaped}' or fullText contains '${escaped}') and trashed=false`;
   const opt = {
     q                    : q,
     fields               : 'nextPageToken, files(id)',
