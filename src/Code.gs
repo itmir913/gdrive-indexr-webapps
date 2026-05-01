@@ -86,8 +86,23 @@ function rebuildMetadataIndex() {
   props.deleteProperty('FOLDER_QUEUE');
   deleteTempTriggers();
 
-  // [추가] 인덱스가 갱신되었으므로 기존 메타데이터 캐시 무효화
-  CacheService.getScriptCache().remove('meta_chunk_count');
+  // 인덱스 갱신 완료 → 메타데이터 캐시 및 키워드 캐시 무효화
+  const cache = CacheService.getScriptCache();
+  cache.remove('meta_chunk_count');
+  try {
+    const kwSheet = ss.getSheetByName(KEYWORD_LOG_SHEET);
+    const kwLastRow = kwSheet.getLastRow();
+    if (kwLastRow >= 2) {
+      const kwData = kwSheet.getRange(2, 1, kwLastRow - 1, 1).getValues();
+      const kwKeys = kwData
+        .map(r => (r[0] || '').toLowerCase().trim())
+        .filter(kw => kw)
+        .map(kw => 'kw_' + kw + '_n');
+      if (kwKeys.length > 0) cache.removeAll(kwKeys);
+    }
+  } catch (e) {
+    Logger.log('키워드 캐시 무효화 오류: ' + e.message);
+  }
 
   Logger.log('🎉 인덱싱 완료!');
 }
@@ -195,7 +210,7 @@ function logKeywords(keywords) {
 // ── 청크 캐시 헬퍼 (100KB 제한 우회) ────────────────────────────────────────
 function _putChunkedCache(cache, baseKey, data, ttl) {
   const json = JSON.stringify(data);
-  const size = 90000;
+  const size = 30000; // 한글 3바이트 × 30000 = 90KB < 100KB 제한
   const count = Math.ceil(json.length / size) || 1;
   const obj = { [baseKey + '_n']: String(count) };
   for (let i = 0; i < count; i++) {
@@ -334,9 +349,9 @@ function getCachedMetadataMap() {
     });
   }
 
-  // 3. 캐시에 저장 (GAS 100KB 제한을 피하기 위해 90KB씩 안전하게 분할)
+  // 3. 캐시에 저장 (GAS 100KB 제한을 피하기 위해 30KB씩 분할: 한글 3바이트 × 30000 = 90KB)
   const jsonStr = JSON.stringify(map);
-  const chunkSize = 90000;
+  const chunkSize = 30000; // 한글 3바이트 × 30000 = 90KB < 100KB 제한
   const chunks = Math.ceil(jsonStr.length / chunkSize);
 
   const cacheObj = { 'meta_chunk_count': chunks.toString() };
@@ -386,7 +401,9 @@ function warmCache() {
     const baseKey = 'kw_' + kw;
     if (_getChunkedCache(cache, baseKey) !== null) return; // 캐시 히트 → skip
 
-    const ids = driveFullTextSearch(kw);
+    const driveIds = driveFullTextSearch(kw);
+    const sheetIds = getNameMatchesFromSheet(kw);
+    const ids = [...new Set([...driveIds, ...sheetIds])];
     _putChunkedCache(cache, baseKey, ids, CACHE_TTL);
     Utilities.sleep(200);
   });
