@@ -192,20 +192,46 @@ function logKeywords(keywords) {
   }
 }
 
+// ── 청크 캐시 헬퍼 (100KB 제한 우회) ────────────────────────────────────────
+function _putChunkedCache(cache, baseKey, data, ttl) {
+  const json = JSON.stringify(data);
+  const size = 90000;
+  const count = Math.ceil(json.length / size) || 1;
+  const obj = { [baseKey + '_n']: String(count) };
+  for (let i = 0; i < count; i++) {
+    obj[baseKey + '_' + i] = json.substring(i * size, (i + 1) * size);
+  }
+  cache.putAll(obj, ttl);
+}
+
+function _getChunkedCache(cache, baseKey) {
+  const countStr = cache.get(baseKey + '_n');
+  if (!countStr) return null;
+  const count = parseInt(countStr, 10);
+  const keys = Array.from({ length: count }, (_, i) => baseKey + '_' + i);
+  const chunks = cache.getAll(keys);
+  let json = '';
+  for (let i = 0; i < count; i++) {
+    if (!chunks[baseKey + '_' + i]) return null;
+    json += chunks[baseKey + '_' + i];
+  }
+  try { return JSON.parse(json); } catch (e) { return null; }
+}
+
 // ── 키워드 → fileId 배열 (캐시 우선) ────────────────────────────────────────
 function getFileIdsForKeyword(keyword) {
   keyword = keyword.toLowerCase().trim();
-  const cacheKey = 'kw_' + keyword;
+  const baseKey = 'kw_' + keyword;
   const cache = CacheService.getScriptCache();
 
-  const cached = cache.get(cacheKey);
-  if (cached !== null) return JSON.parse(cached);
+  const cached = _getChunkedCache(cache, baseKey);
+  if (cached !== null) return cached;
 
   const driveIds = driveFullTextSearch(keyword);      // 1. 드라이브 전체 텍스트 검색 (내용 중심)
   const sheetIds = getNameMatchesFromSheet(keyword);  // 2. 스프레드시트 인덱스에서 파일명 검색 (파일명 중심)
   const combinedIds = [...new Set([...driveIds, ...sheetIds])];  // 3. 두 결과 합치기 (중복 제거)
 
-  cache.put(cacheKey, JSON.stringify(combinedIds), CACHE_TTL);
+  _putChunkedCache(cache, baseKey, combinedIds, CACHE_TTL);
   return combinedIds;
 }
 
@@ -358,32 +384,6 @@ function deleteTempTriggers() {
   });
 }
 
-// ── 폴더 재귀 탐색 ──────────────────────────────────────────────────────────
-function getAllFilesRecursive(folderId, pathPrefix) {
-  const folder      = DriveApp.getFolderById(folderId);
-  const currentPath = pathPrefix ? pathPrefix + '/' + folder.getName() : folder.getName();
-  let   rows        = [];
-
-  const files = folder.getFiles();
-  while (files.hasNext()) {
-    const f = files.next();
-    rows.push([
-      f.getId(),
-      f.getName(),
-      currentPath,
-      f.getUrl(),
-      Utilities.formatDate(f.getLastUpdated(), Session.getScriptTimeZone(), 'yyyy-MM-dd'),
-    ]);
-  }
-
-  const subfolders = folder.getFolders();
-  while (subfolders.hasNext()) {
-    const sub = subfolders.next();
-    rows = rows.concat(getAllFilesRecursive(sub.getId(), currentPath));
-  }
-  return rows;
-}
-
 // ── 캐시 워밍 ────────────────────────────────────────────────────────────────
 function warmCache() {
   const ss    = SpreadsheetApp.openById(INDEX_SHEET_ID);
@@ -405,11 +405,11 @@ function warmCache() {
   topN.forEach(row => {
     const kw  = (row[0] || '').toLowerCase().trim();
     if (!kw) return;
-    const key = 'kw_' + kw;
-    if (cache.get(key) !== null) return; // 캐시 히트 → skip
+    const baseKey = 'kw_' + kw;
+    if (_getChunkedCache(cache, baseKey) !== null) return; // 캐시 히트 → skip
 
     const ids = driveFullTextSearch(kw);
-    cache.put(key, JSON.stringify(ids), CACHE_TTL);
+    _putChunkedCache(cache, baseKey, ids, CACHE_TTL);
     Utilities.sleep(200);
   });
   Logger.log('warmCache 완료');
