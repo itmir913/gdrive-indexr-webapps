@@ -573,11 +573,5 @@ function difference(a, b) {
 }
 
 function getAllFileIds() {
-  const ss    = SpreadsheetApp.openById(INDEX_SHEET_ID);
-  const sheet = ss.getSheetByName(FILE_INDEX_SHEET);
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return new Set();
-
-  const data = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
-  return new Set(data.map(r => r[0]).filter(id => id !== ''));
+  return new Set(Object.keys(getCachedMetadataMap()));
 }
