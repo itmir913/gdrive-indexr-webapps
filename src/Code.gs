@@ -115,7 +115,7 @@ function _rebuildMetadataIndexImpl() {
         .map(kw => 'kw_' + kw + '_n');
 
       if (nKeys.length > 0) {
-        const nValues = cache.getAll(nKeys); // 청크 수 일괄 조회
+        const nValues = _batchGetAll(cache, nKeys); // 청크 수 일괄 조회 (500개 배치)
         const allKeys = [];
         nKeys.forEach(nKey => {
           allKeys.push(nKey);
@@ -125,7 +125,7 @@ function _rebuildMetadataIndexImpl() {
             for (let i = 0; i < count; i++) allKeys.push(base + '_' + i);
           }
         });
-        cache.removeAll(allKeys);
+        _batchRemoveAll(cache, allKeys); // 500개 배치
       }
     }
   } catch (e) {
@@ -233,6 +233,23 @@ function logKeywords(keywords) {
     sheet.getRange(1, 1, rows.length, 3).setValues(rows);
   } finally {
     lock.releaseLock();
+  }
+}
+
+// ── CacheService 배치 헬퍼 (GAS getAll/removeAll 500개 한도 우회) ───────────
+function _batchGetAll(cache, keys) {
+  const BATCH = 500;
+  const result = {};
+  for (let i = 0; i < keys.length; i += BATCH) {
+    Object.assign(result, cache.getAll(keys.slice(i, i + BATCH)));
+  }
+  return result;
+}
+
+function _batchRemoveAll(cache, keys) {
+  const BATCH = 500;
+  for (let i = 0; i < keys.length; i += BATCH) {
+    cache.removeAll(keys.slice(i, i + BATCH));
   }
 }
 
