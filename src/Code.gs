@@ -237,33 +237,10 @@ function getFileIdsForKeyword(keyword) {
 
 // ── 시트 인덱스에서 파일명으로 ID를 찾아주는 헬퍼 함수 ──────────────────
 function getNameMatchesFromSheet(keyword) {
-  const ss = SpreadsheetApp.openById(INDEX_SHEET_ID);
-  const sheet = ss.getSheetByName(FILE_INDEX_SHEET);
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return [];
-
-  // [데이터 가져오기]
-  // getRange(시작 행, 시작 열, 행 개수, 열 개수)
-  // - 2: 2번째 행(헤더를 제외한 실제 데이터 시작줄)부터
-  // - 1: 1번째 열(A열: fileId)부터 시작해서
-  // - lastRow - 1: 실제 데이터가 들어있는 행의 개수만큼
-  // - 2: 총 2개의 열(A열: fileId, B열: 파일명)을 가져옵니다.
-  const data = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
-
-  // [키워드 검색 및 ID 추출]
-  return data
-    .filter(row => {
-      // 자바스크립트 배열은 0부터 시작합니다.
-      // row[0] = A열 (fileId)
-      // row[1] = B열 (파일명)
-      const fileName = row[1] || ''; // 혹시 파일명이 비어있을 경우를 대비해 기본값 '' 처리
-      return fileName.toLowerCase().includes(keyword); // 파일명에 키워드가 포함되어 있는지 확인
-    })
-    .map(row => {
-      // 필터링을 통과한 데이터에서 A열(fileId)만 뽑아서 배열로 만듭니다.
-      const fileId = row[0];
-      return fileId;
-    });
+  const map = getCachedMetadataMap();
+  return Object.entries(map)
+    .filter(([, meta]) => (meta.name || '').toLowerCase().includes(keyword))
+    .map(([id]) => id);
 }
 
 // ── Drive fullText 검색 ──────────────────────────────────────────────────────
