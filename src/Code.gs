@@ -47,7 +47,7 @@ function rebuildMetadataIndex() {
       // 1분 뒤 이어하기 트리거 생성
       ScriptApp.newTrigger('continueIndexing').timeBased().after(60 * 1000).create();
       Logger.log(`[시간 초과 방지] 남은 폴더: ${folderQueue.length}개. 1분 뒤 이어하기 실행.`);
-      return;
+      return 'in_progress';
     }
 
     // 2. 폴더 탐색
@@ -105,6 +105,7 @@ function rebuildMetadataIndex() {
   }
 
   Logger.log('🎉 인덱싱 완료!');
+  return 'done';
 }
 
 // ── 트리거 설치 (수동 1회 실행) ──────────────────────────────────────────────
@@ -441,10 +442,12 @@ function runAdminRebuild(clientHash) {
   }
 
   try {
-    rebuildMetadataIndex(); // 기존에 작성된 함수 호출
-    return "인덱스 갱신에 성공했습니다!";
+    const status = rebuildMetadataIndex();
+    return status === 'done'
+      ? '인덱스 갱신에 성공했습니다!'
+      : '인덱스 갱신 진행 중입니다. 파일 수가 많아 백그라운드에서 이어하기가 실행됩니다 (약 1분 후 자동 완료).';
   } catch (e) {
-    throw new Error("갱신 중 오류 발생: " + e.message);
+    throw new Error('갱신 중 오류 발생: ' + e.message);
   }
 }
 
