@@ -1,6 +1,7 @@
 // ── 상수 ────────────────────────────────────────────────────────────────────
 const FOLDER_ID           = 'your_root_folder_id';
 const INDEX_SHEET_ID      = 'your_spreadsheet_id';
+const ADMIN_PASSWORD      = 'admin1234';   // 실제 사용할 비밀번호로 변경하세요.
 
 const FILE_INDEX_SHEET    = 'FileIndex';   // 파일 메타데이터 인덱스 시트 이름
 const KEYWORD_LOG_SHEET   = 'KeywordLog';  // 키워드 빈도 로그 시트 이름
@@ -301,6 +302,20 @@ function setupTriggers() {
   ScriptApp.newTrigger('purgeStaleKeywords').timeBased().atHour(3).nearMinute(0).everyDays(1).create();
 
   Logger.log('트리거 6개 설치 완료');
+}
+
+// ── 관리자 비밀번호 확인 후 인덱스 재빌드 실행 ───────────────────────────────────
+function runAdminRebuild(password) {
+  if (password !== ADMIN_PASSWORD) {
+    throw new Error('비밀번호가 올바르지 않습니다.');
+  }
+
+  try {
+    rebuildMetadataIndex(); // 기존에 작성된 함수 호출
+    return "인덱스 갱신에 성공했습니다!";
+  } catch (e) {
+    throw new Error("갱신 중 오류 발생: " + e.message);
+  }
 }
 
 // ── Boolean 쿼리 파서 ────────────────────────────────────────────────────────
