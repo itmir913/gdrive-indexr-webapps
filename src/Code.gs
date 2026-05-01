@@ -389,7 +389,7 @@ function warmCache() {
 
   // 1순위: 검색횟수 내림차순, 2순위: 최근 검색일 내림차순 (동점 처리)
   data.sort((a, b) =>
-    parseInt(b[1], 10) - parseInt(a[1], 10) ||
+    (parseInt(b[1], 10) || 0) - (parseInt(a[1], 10) || 0) ||
     new Date(b[2]) - new Date(a[2])
   );
 
