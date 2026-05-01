@@ -94,11 +94,23 @@ function rebuildMetadataIndex() {
     const kwLastRow = kwSheet.getLastRow();
     if (kwLastRow >= 2) {
       const kwData = kwSheet.getRange(2, 1, kwLastRow - 1, 1).getValues();
-      const kwKeys = kwData
+      const nKeys = kwData
         .map(r => (r[0] || '').toLowerCase().trim())
         .filter(kw => kw)
         .map(kw => 'kw_' + kw + '_n');
-      if (kwKeys.length > 0) cache.removeAll(kwKeys);
+      if (nKeys.length === 0) return;
+
+      const nValues = cache.getAll(nKeys); // 청크 수 일괄 조회
+      const allKeys = [];
+      nKeys.forEach(nKey => {
+        allKeys.push(nKey);
+        const count = parseInt(nValues[nKey], 10);
+        if (count > 0) {
+          const base = nKey.slice(0, -2); // 'kw_<keyword>' 추출 (_n 제거)
+          for (let i = 0; i < count; i++) allKeys.push(base + '_' + i);
+        }
+      });
+      cache.removeAll(allKeys);
     }
   } catch (e) {
     Logger.log('키워드 캐시 무효화 오류: ' + e.message);
