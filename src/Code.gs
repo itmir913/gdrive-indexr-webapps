@@ -1,7 +1,7 @@
 // ── 상수 ────────────────────────────────────────────────────────────────────
 const FOLDER_ID           = 'your_root_folder_id';
 const INDEX_SHEET_ID      = 'your_spreadsheet_id';
-const ADMIN_PASSWORD      = 'admin1234';   // 실제 사용할 비밀번호로 변경하세요.
+const ADMIN_PASSWORD      = 'admin1234';   // 실제 사용할 비밀번호로 변경하세요. 편의를 위해 평문으로 작성해도 됩니다.
 
 const FILE_INDEX_SHEET    = 'FileIndex';   // 파일 메타데이터 인덱스 시트 이름
 const KEYWORD_LOG_SHEET   = 'KeywordLog';  // 키워드 빈도 로그 시트 이름
@@ -305,8 +305,12 @@ function setupTriggers() {
 }
 
 // ── 관리자 비밀번호 확인 후 인덱스 재빌드 실행 ───────────────────────────────────
-function runAdminRebuild(password) {
-  if (password !== ADMIN_PASSWORD) {
+function runAdminRebuild(clientHash) {
+  // 서버에 저장된 평문 비밀번호를 SHA-256으로 해싱
+  const serverHash = _computeSHA256(ADMIN_PASSWORD);
+
+  // 클라이언트에서 넘어온 해시값과 비교
+  if (clientHash !== serverHash) {
     throw new Error('비밀번호가 올바르지 않습니다.');
   }
 
@@ -316,6 +320,15 @@ function runAdminRebuild(password) {
   } catch (e) {
     throw new Error("갱신 중 오류 발생: " + e.message);
   }
+}
+
+// ── SHA-256 해시 생성을 위한 내부 헬퍼 함수 ─────────────────────────────────────
+function _computeSHA256(str) {
+  const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, str, Utilities.Charset.UTF_8);
+  return digest.map(function(byte) {
+    const v = (byte < 0) ? 256 + byte : byte;
+    return ("0" + v.toString(16)).slice(-2);
+  }).join("");
 }
 
 // ── Boolean 쿼리 파서 ────────────────────────────────────────────────────────

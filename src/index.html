@@ -315,7 +315,16 @@
     document.getElementById('adminPw').value = '';
   }
 
-  function requestRebuild() {
+  // 평문을 SHA-256 해시(Hex 문자열)로 변환하는 함수
+  async function hashPassword(password) {
+    const msgUint8 = new TextEncoder().encode(password);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  // 갱신 요청 함수
+  async function requestRebuild() {
     const pw = document.getElementById('adminPw').value;
     if (!pw) return alert('비밀번호를 입력하세요.');
 
@@ -323,19 +332,30 @@
     btn.disabled = true;
     btn.innerText = '갱신 중...';
 
-    google.script.run
-            .withSuccessHandler(function(msg) {
-              alert(msg);
-              btn.disabled = false;
-              btn.innerText = '갱신 시작';
-              closeModal();
-            })
-            .withFailureHandler(function(err) {
-              alert(err.message);
-              btn.disabled = false;
-              btn.innerText = '갱신 시작';
-            })
-            .runAdminRebuild(pw);
+    try {
+      // 1. 입력받은 비밀번호를 해시 처리
+      const hashedPw = await hashPassword(pw);
+
+      // 2. 해시된 값을 백엔드로 전송
+      google.script.run
+              .withSuccessHandler(function(msg) {
+                alert(msg);
+                btn.disabled = false;
+                btn.innerText = '갱신 시작';
+                closeModal();
+              })
+              .withFailureHandler(function(err) {
+                alert(err.message);
+                btn.disabled = false;
+                btn.innerText = '갱신 시작';
+              })
+              .runAdminRebuild(hashedPw);
+
+    } catch (error) {
+      alert("해시 생성 중 오류가 발생했습니다.");
+      btn.disabled = false;
+      btn.innerText = '갱신 시작';
+    }
   }
 </script>
 </body>
