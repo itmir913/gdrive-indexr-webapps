@@ -165,10 +165,10 @@ function doSearch(query) {
 
     const tokens = tokenize(query);
 
-    // 로깅용 키워드 추출 (연산자·괄호 제외)
-    const keywords = tokens
-      .filter(t => t.type === 'KEYWORD')
-      .map(t => t.value);
+    // 로깅용 키워드 추출 (연산자·괄호 제외, 중복 제거)
+    const keywords = [...new Set(
+      tokens.filter(t => t.type === 'KEYWORD').map(t => t.value)
+    )];
     logKeywords(keywords);
 
     const tree      = buildExpressionTree(tokens);
@@ -432,12 +432,12 @@ function warmCache() {
   const cache = CacheService.getScriptCache();
   let warmed = 0;
 
-  topN.forEach(row => {
-    if (Date.now() - startTime > MAX_WARM_TIME) return; // 시간 초과 시 나머지 skip
-    const kw  = (row[0] || '').toLowerCase().trim();
-    if (!kw) return;
+  for (const row of topN) {
+    if (Date.now() - startTime > MAX_WARM_TIME) break; // 시간 초과 시 즉시 종료
+    const kw = (row[0] || '').toLowerCase().trim();
+    if (!kw) continue;
     const baseKey = 'kw_' + kw;
-    if (_getChunkedCache(cache, baseKey) !== null) return; // 캐시 히트 → skip
+    if (_getChunkedCache(cache, baseKey) !== null) continue; // 캐시 히트 → skip
 
     const driveIds = driveFullTextSearch(kw);
     const sheetIds = getNameMatchesFromSheet(kw);
@@ -445,28 +445,38 @@ function warmCache() {
     _putChunkedCache(cache, baseKey, ids, CACHE_TTL);
     warmed++;
     Utilities.sleep(200);
-  });
+  }
   Logger.log(`warmCache 완료 (${warmed}개 워밍)`);
 }
 
 // ── 만료 키워드 정리 (매일 03:00 트리거) ────────────────────────────────────
 function purgeStaleKeywords() {
-  const ss    = SpreadsheetApp.openById(INDEX_SHEET_ID);
-  const sheet = ss.getSheetByName(KEYWORD_LOG_SHEET);
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return;
-
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 7); // 7일 이상 미검색 키워드 삭제
-
-  const data = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
-  const kept = data.filter(row => row[0] && new Date(row[2]) >= cutoff);
-
-  sheet.getRange(2, 1, lastRow - 1, 3).clearContent();
-  if (kept.length > 0) {
-    sheet.getRange(2, 1, kept.length, 3).setValues(kept);
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+  } catch (e) {
+    return;
   }
-  Logger.log('purgeStaleKeywords: ' + (data.length - kept.length) + '개 삭제, ' + kept.length + '개 유지');
+  try {
+    const ss    = SpreadsheetApp.openById(INDEX_SHEET_ID);
+    const sheet = ss.getSheetByName(KEYWORD_LOG_SHEET);
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return;
+
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 7); // 7일 이상 미검색 키워드 삭제
+
+    const data = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
+    const kept = data.filter(row => row[0] && new Date(row[2]) >= cutoff);
+
+    sheet.getRange(2, 1, lastRow - 1, 3).clearContent();
+    if (kept.length > 0) {
+      sheet.getRange(2, 1, kept.length, 3).setValues(kept);
+    }
+    Logger.log('purgeStaleKeywords: ' + (data.length - kept.length) + '개 삭제, ' + kept.length + '개 유지');
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // ── 관리자 비밀번호 확인 후 인덱스 재빌드 실행 ───────────────────────────────────
