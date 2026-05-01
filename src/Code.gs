@@ -169,7 +169,7 @@ function doSearch(query) {
     const keywords = [...new Set(
       tokens.filter(t => t.type === 'KEYWORD').map(t => t.value)
     )];
-    logKeywords(keywords);
+    try { logKeywords(keywords); } catch (e) { Logger.log('logKeywords error: ' + e.message); }
 
     const tree      = buildExpressionTree(tokens);
     const resultSet = evaluate(tree);
@@ -196,6 +196,7 @@ function logKeywords(keywords) {
   try {
     const ss    = SpreadsheetApp.openById(INDEX_SHEET_ID);
     const sheet = ss.getSheetByName(KEYWORD_LOG_SHEET);
+    if (!sheet) return;
     const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
 
     // 헤더 보장
@@ -417,6 +418,7 @@ function warmCache() {
 
   const ss    = SpreadsheetApp.openById(INDEX_SHEET_ID);
   const sheet = ss.getSheetByName(KEYWORD_LOG_SHEET);
+  if (!sheet) return;
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return;
 
@@ -460,6 +462,7 @@ function purgeStaleKeywords() {
   try {
     const ss    = SpreadsheetApp.openById(INDEX_SHEET_ID);
     const sheet = ss.getSheetByName(KEYWORD_LOG_SHEET);
+    if (!sheet) return;
     const lastRow = sheet.getLastRow();
     if (lastRow < 2) return;
 
