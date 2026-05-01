@@ -192,24 +192,95 @@ function lookupMetadata(fileIds) {
   return results;
 }
 
-// ── 메타데이터 인덱스 재빌드 (매일 02:00 트리거) ────────────────────────────
+// ── 메타데이터 인덱스 재빌드 (매일 02:00 트리거 / 시간 초과 방지 / 이어하기 지원) ───
 function rebuildMetadataIndex() {
-  const ss    = SpreadsheetApp.openById(INDEX_SHEET_ID);
+  const MAX_EXECUTION_TIME = 4 * 60 * 1000; // 4분 (안전하게 설정)
+  const startTime = Date.now();
+  const props = PropertiesService.getScriptProperties();
+
+  const ss = SpreadsheetApp.openById(INDEX_SHEET_ID);
   const sheet = ss.getSheetByName(FILE_INDEX_SHEET);
 
-  // 헤더
-  sheet.getRange(1, 1, 1, 5).setValues([['fileId', '파일명', '폴더경로', 'URL', '수정일']]);
+  // 진행 상태(대기열) 불러오기
+  let queueStr = props.getProperty('FOLDER_QUEUE');
+  let folderQueue = queueStr ? JSON.parse(queueStr) : null;
 
-  // 기존 데이터 행 클리어
-  if (sheet.getLastRow() >= 2) {
-    sheet.getRange(2, 1, sheet.getLastRow() - 1, 5).clearContent();
+  // 처음 실행되는 경우 (대기열이 없을 때)
+  if (!folderQueue) {
+    folderQueue = [{ id: FOLDER_ID, path: '' }];
+
+    // 기존 데이터 초기화 및 헤더 작성
+    if (sheet.getLastRow() >= 2) {
+      sheet.getRange(2, 1, sheet.getLastRow() - 1, 5).clearContent();
+    }
+    sheet.getRange(1, 1, 1, 5).setValues([['fileId', '파일명', '폴더경로', 'URL', '수정일']]);
+
+    deleteTempTriggers();
   }
 
-  const rows = getAllFilesRecursive(FOLDER_ID, '');
+  let rows = [];
+
+  while (folderQueue.length > 0) {
+    // 1. 실행 시간이 4분을 초과했는지 확인
+    if (Date.now() - startTime > MAX_EXECUTION_TIME) {
+      props.setProperty('FOLDER_QUEUE', JSON.stringify(folderQueue)); // 남은 폴더 저장
+      if (rows.length > 0) {
+        sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 5).setValues(rows);
+      }
+      // 1분 뒤 이어하기 트리거 생성
+      ScriptApp.newTrigger('continueIndexing').timeBased().after(60 * 1000).create();
+      Logger.log(`[시간 초과 방지] 남은 폴더: ${folderQueue.length}개. 1분 뒤 이어하기 실행.`);
+      return;
+    }
+
+    // 2. 폴더 탐색
+    const current = folderQueue.shift();
+    try {
+      const folder = DriveApp.getFolderById(current.id);
+      const currentPath = current.path ? current.path + '/' + folder.getName() : folder.getName();
+      const files = folder.getFiles();
+
+      while (files.hasNext()) {
+        const f = files.next();
+        rows.push([
+          f.getId(), f.getName(), currentPath, f.getUrl(),
+          Utilities.formatDate(f.getLastUpdated(), Session.getScriptTimeZone(), 'yyyy-MM-dd')
+        ]);
+
+        if (rows.length >= 500) {
+          sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 5).setValues(rows);
+          rows = [];
+        }
+      }
+
+      const subfolders = folder.getFolders();
+      while (subfolders.hasNext()) {
+        folderQueue.push({ id: subfolders.next().getId(), path: currentPath });
+      }
+    } catch (e) {
+      Logger.log(`폴더 접근 오류 [${current.id}]: ${e.message}`);
+    }
+  }
+
+  // 3. 탐색 완료
   if (rows.length > 0) {
-    sheet.getRange(2, 1, rows.length, 5).setValues(rows);
+    sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 5).setValues(rows);
   }
-  Logger.log('rebuildMetadataIndex: ' + rows.length + '개 파일 인덱싱 완료');
+  props.deleteProperty('FOLDER_QUEUE');
+  deleteTempTriggers();
+  Logger.log('🎉 인덱싱 완료!');
+}
+
+// ── 이어하기 헬퍼 함수 ──────────────────────────────────────────────────────
+function continueIndexing() {
+  rebuildMetadataIndex();
+}
+
+function deleteTempTriggers() {
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(t => {
+    if (t.getHandlerFunction() === 'continueIndexing') ScriptApp.deleteTrigger(t);
+  });
 }
 
 // ── 폴더 재귀 탐색 ──────────────────────────────────────────────────────────
