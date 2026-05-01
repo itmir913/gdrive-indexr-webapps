@@ -85,6 +85,10 @@ function rebuildMetadataIndex() {
   }
   props.deleteProperty('FOLDER_QUEUE');
   deleteTempTriggers();
+
+  // [추가] 인덱스가 갱신되었으므로 기존 메타데이터 캐시 무효화
+  CacheService.getScriptCache().remove('meta_chunk_count');
+
   Logger.log('🎉 인덱싱 완료!');
 }
 
@@ -265,25 +269,81 @@ function driveFullTextSearch(keyword) {
 }
 
 // ── fileId 배열 → 메타데이터 조회 (FILE_INDEX_SHEET) ──────────────────────────────────
+// ── fileId 배열 → 메타데이터 조회 (메모리 캐싱 적용) ──────────────────────────────────
 function lookupMetadata(fileIds) {
-  const ss    = SpreadsheetApp.openById(INDEX_SHEET_ID);
-  const sheet = ss.getSheetByName(FILE_INDEX_SHEET);
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return [];
+  if (!fileIds || fileIds.length === 0) return [];
 
-  const data = sheet.getRange(2, 1, lastRow - 1, 5).getValues();
-
-  // Map 구성: fileId → {name, path, url}
-  const map = {};
-  data.forEach(row => {
-    if (row[0]) map[row[0]] = { name: row[1], path: row[2], url: row[3] };
-  });
-
+  // 캐시(또는 시트)에서 전체 파일 정보 Map을 가져옵니다.
+  const map = getCachedMetadataMap();
   const results = [];
+
   fileIds.forEach(id => {
     if (map[id]) results.push(map[id]);
   });
   return results;
+}
+
+// ── 메타데이터 전체 캐싱 헬퍼 (100KB 제한 우회용 청크 분할) ──────────────────
+function getCachedMetadataMap() {
+  const cache = CacheService.getScriptCache();
+  const chunkCountStr = cache.get('meta_chunk_count');
+
+  // 1. 캐시 히트: 쪼개진 청크들을 한 번에 가져와서 조립
+  if (chunkCountStr !== null) {
+    const chunkCount = parseInt(chunkCountStr, 10);
+    const keys = [];
+    for (let i = 0; i < chunkCount; i++) {
+      keys.push('meta_chunk_' + i);
+    }
+
+    const chunksObj = cache.getAll(keys); // API 호출 1번으로 최적화
+    let jsonStr = '';
+    let isCacheValid = true;
+
+    for (let i = 0; i < chunkCount; i++) {
+      if (!chunksObj['meta_chunk_' + i]) {
+        isCacheValid = false; // 중간에 청크가 하나라도 유실되었으면 무효화
+        break;
+      }
+      jsonStr += chunksObj['meta_chunk_' + i];
+    }
+
+    if (isCacheValid) {
+      try {
+        return JSON.parse(jsonStr); // 메모리에 룩업 테이블(Map) 즉시 복원
+      } catch (e) {
+        // 파싱 실패 시 아래 시트 읽기 로직으로 폴백(Fallback)
+      }
+    }
+  }
+
+  // 2. 캐시 미스: 스프레드시트에서 직접 읽어오기
+  const ss = SpreadsheetApp.openById(INDEX_SHEET_ID);
+  const sheet = ss.getSheetByName(FILE_INDEX_SHEET);
+  const lastRow = sheet.getLastRow();
+  const map = {};
+
+  if (lastRow >= 2) {
+    const data = sheet.getRange(2, 1, lastRow - 1, 5).getValues();
+    data.forEach(row => {
+      if (row[0]) map[row[0]] = { name: row[1], path: row[2], url: row[3] };
+    });
+  }
+
+  // 3. 캐시에 저장 (GAS 100KB 제한을 피하기 위해 90KB씩 안전하게 분할)
+  const jsonStr = JSON.stringify(map);
+  const chunkSize = 90000;
+  const chunks = Math.ceil(jsonStr.length / chunkSize);
+
+  const cacheObj = { 'meta_chunk_count': chunks.toString() };
+  for (let i = 0; i < chunks; i++) {
+    cacheObj['meta_chunk_' + i] = jsonStr.substring(i * chunkSize, (i + 1) * chunkSize);
+  }
+
+  // 쪼개진 데이터를 캐시에 한 번에 저장 (최적화)
+  cache.putAll(cacheObj, CACHE_TTL);
+
+  return map;
 }
 
 // ── 이어하기 헬퍼 함수 ──────────────────────────────────────────────────────
