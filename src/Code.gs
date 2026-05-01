@@ -198,39 +198,26 @@ function logKeywords(keywords) {
     const sheet = ss.getSheetByName(KEYWORD_LOG_SHEET);
     const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
 
-    // 전체 읽기
-    const lastRow = sheet.getLastRow();
-    let rows;
-    if (lastRow < 1) {
-      rows = [['키워드', '검색횟수', '마지막검색일']];
-    } else {
-      rows = sheet.getRange(1, 1, lastRow, 3).getValues();
-    }
-
-    // 헤더가 없으면 삽입
-    if (rows[0][0] !== '키워드') {
-      rows.unshift(['키워드', '검색횟수', '마지막검색일']);
-    }
-
-    // Map 구성 (헤더 제외)
-    const keyMap = {};
-    for (let i = 1; i < rows.length; i++) {
-      keyMap[rows[i][0]] = i;
+    // 헤더 보장
+    if (sheet.getLastRow() === 0) {
+      sheet.appendRow(['키워드', '검색횟수', '마지막검색일']);
     }
 
     keywords.forEach(kw => {
-      if (kw in keyMap) {
-        const idx = keyMap[kw];
-        rows[idx][1] = (parseInt(rows[idx][1], 10) || 0) + 1;
-        rows[idx][2] = today;
+      const lastRow = sheet.getLastRow();
+      // 헤더(1행) 제외하고 키워드 열에서만 정확히 일치하는 셀 탐색
+      const found = lastRow >= 2
+        ? sheet.getRange(2, 1, lastRow - 1, 1).createTextFinder(kw).matchEntireCell(true).findNext()
+        : null;
+
+      if (found) {
+        const r = found.getRow();
+        const count = (parseInt(sheet.getRange(r, 2).getValue(), 10) || 0) + 1;
+        sheet.getRange(r, 2, 1, 2).setValues([[count, today]]);
       } else {
-        rows.push([kw, 1, today]);
-        keyMap[kw] = rows.length - 1;
+        sheet.appendRow([kw, 1, today]);
       }
     });
-
-    sheet.clearContents();
-    sheet.getRange(1, 1, rows.length, 3).setValues(rows);
   } finally {
     lock.releaseLock();
   }
@@ -470,7 +457,7 @@ function purgeStaleKeywords() {
   if (lastRow < 2) return;
 
   const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 30); // 30일 이상 미검색 키워드 삭제
+  cutoff.setDate(cutoff.getDate() - 7); // 7일 이상 미검색 키워드 삭제
 
   const data = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
   const kept = data.filter(row => row[0] && new Date(row[2]) >= cutoff);
