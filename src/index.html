@@ -3,242 +3,201 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>입시자료 통합검색 시스템</title>
+  <title>입시자료 통합검색</title>
+  <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v3.2.1/dist/web/variable/pretendardvariable.css" />
+
   <style>
+    /* ── 기본 설정 ── */
+    :root {
+      --primary-color: #1a73e8;
+      --primary-hover: #1557b0;
+      --bg-color: #f4f6f8;
+      --card-bg: #ffffff;
+      --text-main: #202124;
+      --text-sub: #5f6368;
+      --border-color: #e8eaed;
+    }
+
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #f8f9fa;
-      color: #212529;
-      padding: 1.5rem 1rem;
+      font-family: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      line-height: 1.6;
+      padding: 2rem 1rem;
       overflow-y: scroll;
     }
 
-    .container {
-      max-width: 720px;
-      margin: 0 auto;
-    }
+    .container { max-width: 760px; margin: 0 auto; }
 
-    h1 {
-      font-size: 1.5rem;
-      font-weight: 700;
-      margin-bottom: 1.5rem;
-      color: #1a73e8;
-    }
+    /* ── 헤더 타이틀 ── */
+    .header { text-align: center; margin-bottom: 2.5rem; }
+    .header h1 { font-size: 1.8rem; font-weight: 700; color: var(--text-main); letter-spacing: -0.5px; }
+    .header p { color: var(--text-sub); font-size: 0.95rem; margin-top: 0.5rem; }
 
     /* ── 검색 영역 ── */
-    .search-area {
-      background: #fff;
-      border: 1px solid #dadce0;
-      border-radius: 8px;
-      padding: 1rem;
-      margin-bottom: 1rem;
-    }
-
-    .input-row {
-      display: flex;
-      gap: 0.5rem;
-    }
-
+    .search-wrapper { position: relative; display: flex; gap: 10px; margin-bottom: 2rem; }
     #searchInput {
-      flex: 1;
-      font-size: 1rem;
-      padding: 0.5rem 0.75rem;
-      border: 1px solid #dadce0;
-      border-radius: 4px;
-      outline: none;
-      transition: border-color 0.15s;
+      flex: 1; font-family: inherit; font-size: 1.1rem; padding: 1rem 1.5rem;
+      border: 1px solid transparent; border-radius: 50px; background: var(--card-bg);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05); transition: all 0.3s ease; outline: none;
     }
-
-    #searchInput:focus {
-      border-color: #1a73e8;
-    }
-
+    #searchInput:focus { box-shadow: 0 6px 20px rgba(26, 115, 232, 0.15); border: 1px solid var(--primary-color); }
+    #searchInput::placeholder { color: #9aa0a6; }
     #searchBtn {
-      padding: 0.5rem 1.25rem;
-      background: #1a73e8;
-      color: #fff;
-      border: none;
-      border-radius: 4px;
-      font-size: 0.95rem;
-      cursor: pointer;
-      white-space: nowrap;
-      transition: background 0.15s;
+      font-family: inherit; font-size: 1rem; font-weight: 600; color: white;
+      background-color: var(--primary-color); border: none; border-radius: 50px;
+      padding: 0 1.5rem; cursor: pointer; box-shadow: 0 4px 12px rgba(26, 115, 232, 0.2); transition: all 0.2s ease;
     }
+    #searchBtn:hover { background-color: var(--primary-hover); transform: translateY(-2px); box-shadow: 0 6px 16px rgba(26, 115, 232, 0.3); }
+    #searchBtn:disabled { background-color: #dadce0; cursor: not-allowed; transform: none; box-shadow: none; }
 
-    #searchBtn:hover  { background: #1558b0; }
-    #searchBtn:disabled { background: #a8c7fa; cursor: default; }
-
-    /* ── 연산자 힌트 버튼 ── */
-    .operator-hints {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.4rem;
-      align-items: center;
-      margin-top: 0.65rem;
-    }
-
-    .operator-hints span {
-      font-size: 0.8rem;
-      color: #5f6368;
-    }
-
-    .op-btn {
-      font-size: 0.78rem;
-      padding: 0.2rem 0.6rem;
-      border: 1px solid #dadce0;
-      border-radius: 12px;
-      background: #f1f3f4;
-      color: #3c4043;
-      cursor: pointer;
-      transition: background 0.1s;
-    }
-
-    .op-btn:hover { background: #e8eaed; }
-
-    /* ── 개인정보 안내 ── */
-    .privacy-notice {
-      font-size: 0.75rem;
-      color: #80868b;
-      font-style: italic;
-      margin-top: 0.65rem;
-    }
-
-    /* ── 상태 / 스피너 ── */
-    #status {
-      min-height: 2rem;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      margin-bottom: 0.5rem;
-      font-size: 0.9rem;
-      color: #5f6368;
-    }
-
+    /* ── 상태 표시 ── */
+    #status { text-align: center; margin-bottom: 1.5rem; font-size: 0.95rem; color: var(--text-sub); min-height: 24px; }
     .spinner {
-      width: 18px;
-      height: 18px;
-      border: 2px solid #dadce0;
-      border-top-color: #1a73e8;
-      border-radius: 50%;
-      animation: spin 0.75s linear infinite;
-      flex-shrink: 0;
+      display: inline-block; width: 18px; height: 18px; border: 2px solid #e8eaed;
+      border-top-color: var(--primary-color); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 8px;
     }
-
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* ── 결과 목록 ── */
-    .result-item {
-      background: #fff;
-      border: 1px solid #dadce0;
-      border-radius: 8px;
-      padding: 0.85rem 1rem;
-      margin-bottom: 0.6rem;
+    /* ── 검색 가이드 (초기 화면 팁) ── */
+    .guide-box {
+      background-color: #f8fbff;
+      border: 1px solid #d2e3fc;
+      border-radius: 16px;
+      padding: 1.8rem;
+      box-shadow: 0 2px 8px rgba(26, 115, 232, 0.04);
     }
-
-    .result-name {
-      font-weight: 600;
-      font-size: 0.95rem;
-      margin-bottom: 0.35rem;
-      word-break: break-all;
-    }
-
-    .tag-row {
+    .guide-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #1967d2;
+      margin-bottom: 1rem;
       display: flex;
-      flex-wrap: wrap;
-      gap: 0.3rem;
-      margin-bottom: 0.5rem;
+      align-items: center;
+      gap: 6px;
+    }
+    .guide-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .guide-list li {
+      font-size: 0.95rem;
+      color: #3c4043;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+    .code-tag {
+      background-color: #e8eaed;
+      color: #d93025;
+      font-family: monospace;
+      font-size: 0.9rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 6px;
+      letter-spacing: -0.5px;
+      word-break: keep-all;
+    }
+    .guide-desc {
+      color: var(--text-sub);
+      font-size: 0.9rem;
     }
 
-    .tag {
-      display: inline-block;
-      background: #e8f0fe;
-      color: #1a73e8;
-      font-size: 0.75rem;
-      padding: 0.15rem 0.5rem;
-      border-radius: 10px;
+    /* ── 검색 결과 카드 ── */
+    #results { display: flex; flex-direction: column; gap: 16px; }
+    .result-item {
+      background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 16px;
+      padding: 1.5rem; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02); transition: transform 0.2s ease, box-shadow 0.2s ease;
+      display: flex; flex-direction: column; gap: 12px;
     }
+    .result-item:hover { transform: translateY(-4px); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08); border-color: transparent; }
+    .result-name { font-size: 1.15rem; font-weight: 600; color: var(--text-main); word-break: break-all; }
+
+    .tag-row { display: flex; flex-wrap: wrap; gap: 6px; }
+    .tag { background-color: #e8f0fe; color: #1967d2; font-size: 0.8rem; font-weight: 500; padding: 4px 10px; border-radius: 20px; }
 
     .drive-link {
-      font-size: 0.82rem;
-      color: #1a73e8;
-      text-decoration: none;
+      align-self: flex-start; display: inline-flex; align-items: center; margin-top: 4px;
+      font-size: 0.9rem; font-weight: 600; color: var(--primary-color); text-decoration: none;
+      padding: 8px 16px; border-radius: 8px; background-color: #f8f9fa; transition: background-color 0.2s;
     }
+    .drive-link:hover { background-color: #e8eaed; text-decoration: none; }
 
-    .drive-link:hover { text-decoration: underline; }
-
-    .no-result {
-      color: #5f6368;
-      font-size: 0.9rem;
-      padding: 0.5rem 0;
-    }
-
-    .error-msg {
-      color: #d93025;
-      font-size: 0.9rem;
-      padding: 0.5rem 0;
-    }
+    /* 기타 안내 */
+    .no-result, .error-msg { text-align: center; padding: 3rem 1rem; background: var(--card-bg); border-radius: 16px; color: var(--text-sub); }
+    .error-msg { color: #d93025; }
   </style>
 </head>
 <body>
+
 <div class="container">
-  <h1>입시자료 통합검색</h1>
+  <div class="header">
+    <h1>입시자료 통합검색</h1>
+    <p>구글 드라이브의 모든 문서를 키워드로 빠르게 찾아보세요</p>
+  </div>
 
-  <div class="search-area">
-    <div class="input-row">
-      <input id="searchInput" type="text"
-             placeholder="키워드를 입력하세요 (공백=AND)">
-      <button id="searchBtn" onclick="runSearch()">검색</button>
-    </div>
-
-    <div class="operator-hints">
-      <span>연산자:</span>
-      <button class="op-btn" onclick="appendOp(' AND ')">AND</button>
-      <button class="op-btn" onclick="appendOp(' OR ')">OR</button>
-      <button class="op-btn" onclick="appendOp(' NOT ')">NOT</button>
-      <button class="op-btn" onclick="appendOp('(')">&#40;</button>
-      <button class="op-btn" onclick="appendOp(')')">&#41;</button>
-    </div>
-
-    <p class="privacy-notice">검색어는 서비스 개선을 위해 익명으로 수집됩니다</p>
+  <div class="search-wrapper">
+    <input type="text" id="searchInput" placeholder="검색어를 입력하세요 (예: 서울대 수시)"
+           onkeypress="if(event.key === 'Enter') doSearchUI()">
+    <button id="searchBtn" onclick="doSearchUI()">검색</button>
   </div>
 
   <div id="status"></div>
-  <div id="results"></div>
+  <div id="results">
+    <div class="guide-box">
+      <div class="guide-title">💡 더 정확하게 검색하는 방법</div>
+      <ul class="guide-list">
+        <li>
+          <span class="code-tag">예체능 서울</span>
+          <span class="guide-desc"><b>(AND)</b> 두 단어가 모두 포함된 문서를 찾습니다. (띄어쓰기)</span>
+        </li>
+        <li>
+          <span class="code-tag">수학 OR 영어</span>
+          <span class="guide-desc"><b>(OR)</b> 두 단어 중 하나라도 포함된 문서를 찾습니다.</span>
+        </li>
+        <li>
+          <span class="code-tag">수학 NOT 서울</span>
+          <span class="guide-desc"><b>(NOT)</b> '수학'은 포함하지만 '서울'은 제외합니다.</span>
+        </li>
+        <li>
+          <span class="code-tag">(수학 OR 영어) NOT 서울</span>
+          <span class="guide-desc"><b>(괄호)</b> 괄호를 사용하여 우선순위를 지정할 수 있습니다.</span>
+        </li>
+      </ul>
+    </div>
+  </div>
 </div>
 
 <script>
-  var searchInput = document.getElementById('searchInput');
-  var searchBtn   = document.getElementById('searchBtn');
-  var statusDiv   = document.getElementById('status');
-  var resultsDiv  = document.getElementById('results');
+  const searchInput = document.getElementById('searchInput');
+  const searchBtn = document.getElementById('searchBtn');
+  const statusDiv = document.getElementById('status');
+  const resultsDiv = document.getElementById('results');
 
-  searchInput.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') runSearch();
-  });
+  // 검색 가이드 원본 HTML 저장 (결과가 없을 때 다시 보여주기 위함)
+  const initialGuideHTML = resultsDiv.innerHTML;
 
-  function appendOp(op) {
-    searchInput.value += op;
-    searchInput.focus();
+  function escHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
-  function runSearch() {
-    var query = searchInput.value.trim();
-    if (!query) {
-      statusDiv.innerHTML = '<span>검색어를 입력하세요.</span>';
-      resultsDiv.innerHTML = '';
-      return;
-    }
+  function doSearchUI() {
+    const query = searchInput.value.trim();
+    if (!query) return;
 
     searchBtn.disabled = true;
-    statusDiv.innerHTML = '<div class="spinner"></div><span>검색 중...</span>';
+    statusDiv.innerHTML = '<div class="spinner"></div><span>자료를 찾고 있습니다...</span>';
     resultsDiv.innerHTML = '';
 
     google.script.run
-      .withSuccessHandler(displayResults)
-      .withFailureHandler(handleError)
-      .doSearch(query);
+            .withSuccessHandler(displayResults)
+            .withFailureHandler(handleError)
+            .doSearch(query);
   }
 
   function displayResults(results) {
@@ -246,22 +205,25 @@
     statusDiv.innerHTML = '';
 
     if (!results || results.length === 0) {
-      resultsDiv.innerHTML = '<p class="no-result">검색 결과가 없습니다.</p>';
+      // 검색 결과가 없을 경우 메시지와 함께 가이드를 다시 보여줌
+      resultsDiv.innerHTML = '<div class="no-result">일치하는 검색 결과가 없습니다. 연산자를 활용해 보세요!</div>' + initialGuideHTML;
       return;
     }
 
-    var html = '';
+    let html = '';
     results.forEach(function(item) {
-      var tags = (item.path || '').split('/').filter(function(s) { return s.length > 0; });
-      var tagHtml = tags.map(function(t) {
-        return '<span class="tag">' + escHtml(t) + '</span>';
-      }).join('');
+      const tags = (item.path || '').split('/').filter(s => s.length > 0);
+      const tagHtml = tags.map(t => '<span class="tag">' + escHtml(t) + '</span>').join('');
 
-      html += '<div class="result-item">'
-            +   '<div class="result-name">' + escHtml(item.name) + '</div>'
-            +   '<div class="tag-row">' + tagHtml + '</div>'
-            +   '<a class="drive-link" href="' + escHtml(item.url) + '" target="_blank" rel="noopener">드라이브에서 열기 ↗</a>'
-            + '</div>';
+      html += `
+          <div class="result-item">
+            <div class="result-name">${escHtml(item.name)}</div>
+            ${tagHtml ? `<div class="tag-row">${tagHtml}</div>` : ''}
+            <a class="drive-link" href="${escHtml(item.url)}" target="_blank" rel="noopener">
+              드라이브에서 열기 ↗
+            </a>
+          </div>
+        `;
     });
     resultsDiv.innerHTML = html;
   }
@@ -269,15 +231,7 @@
   function handleError(error) {
     searchBtn.disabled = false;
     statusDiv.innerHTML = '';
-    resultsDiv.innerHTML = '<p class="error-msg">오류가 발생했습니다. 다시 시도해 주세요.</p>';
-  }
-
-  function escHtml(str) {
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+    resultsDiv.innerHTML = `<div class="error-msg">오류가 발생했습니다: ${escHtml(error.message || error)}</div>`;
   }
 </script>
 </body>
