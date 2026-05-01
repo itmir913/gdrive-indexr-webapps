@@ -192,7 +192,7 @@ function logKeywords(keywords) {
     keywords.forEach(kw => {
       if (kw in keyMap) {
         const idx = keyMap[kw];
-        rows[idx][1] = parseInt(rows[idx][1], 10) + 1;
+        rows[idx][1] = (parseInt(rows[idx][1], 10) || 0) + 1;
         rows[idx][2] = today;
       } else {
         rows.push([kw, 1, today]);
