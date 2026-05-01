@@ -110,7 +110,7 @@ function setupTriggers() {
 // ── 진입점 ───────────────────────────────────────────────────────────────────
 function doGet(e) {
   return HtmlService.createHtmlOutputFromFile('index')
-    .setTitle('입시자료 통합검색');
+    .setTitle('대학진학자료 통합검색기');
 }
 
 // ── 검색 메인 (google.script.run 호출점) ────────────────────────────────────
