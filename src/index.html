@@ -258,7 +258,12 @@
   }
 
   function doSearchUI() {
-    const query = searchInput.value.trim();
+    // 정규식을 사용해 2개 이상의 연속된 공백을 1개의 공백으로 압축한 뒤 양끝 공백 제거
+    const query = searchInput.value.replace(/\s+/g, ' ').trim();
+
+    // (선택) 검색창의 텍스트도 정제된 쿼리로 바꿔주면 시각적으로 더 깔끔합니다.
+    searchInput.value = query;
+
     if (!query) return;
 
     searchBtn.disabled = true;
