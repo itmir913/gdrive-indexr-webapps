@@ -110,7 +110,7 @@ function _rebuildMetadataIndexImpl() {
     if (kwLastRow >= 2) {
       const kwData = kwSheet.getRange(2, 1, kwLastRow - 1, 1).getValues();
       const nKeys = kwData
-        .map(r => (r[0] || '').toLowerCase().trim())
+        .map(r => String(r[0] ?? '').toLowerCase().trim())
         .filter(kw => kw)
         .map(kw => 'kw_' + kw + '_n');
 
@@ -434,7 +434,7 @@ function warmCache() {
 
   for (const row of topN) {
     if (Date.now() - startTime > MAX_WARM_TIME) break; // 시간 초과 시 즉시 종료
-    const kw = (row[0] || '').toLowerCase().trim();
+    const kw = String(row[0] ?? '').toLowerCase().trim();
     if (!kw) continue;
     const baseKey = 'kw_' + kw;
     if (_getChunkedCache(cache, baseKey) !== null) continue; // 캐시 히트 → skip
