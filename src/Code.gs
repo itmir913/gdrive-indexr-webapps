@@ -30,6 +30,10 @@ function _rebuildMetadataIndexImpl() {
 
   const ss = SpreadsheetApp.openById(INDEX_SHEET_ID);
   const sheet = ss.getSheetByName(FILE_INDEX_SHEET);
+  if (!sheet) {
+    Logger.log('[rebuildMetadataIndex] FileIndex 시트를 찾을 수 없습니다.');
+    return 'error';
+  }
 
   // 진행 상태(대기열) 불러오기
   let queueStr = props.getProperty('FOLDER_QUEUE');
@@ -373,6 +377,7 @@ function getCachedMetadataMap() {
   // 2. 캐시 미스: 스프레드시트에서 직접 읽어오기
   const ss = SpreadsheetApp.openById(INDEX_SHEET_ID);
   const sheet = ss.getSheetByName(FILE_INDEX_SHEET);
+  if (!sheet) return {};
   const lastRow = sheet.getLastRow();
   const map = {};
 
@@ -496,6 +501,7 @@ function runAdminRebuild(clientHash) {
     const status = rebuildMetadataIndex();
     if (status === 'done')      return '인덱스 갱신에 성공했습니다!';
     if (status === 'skipped')   return '다른 인덱싱 작업이 이미 실행 중입니다. 잠시 후 다시 시도하세요.';
+    if (status === 'error')     return 'FileIndex 시트를 찾을 수 없습니다. 스프레드시트 설정을 확인하세요.';
     return '인덱스 갱신 진행 중입니다. 파일 수가 많아 백그라운드에서 이어하기가 실행됩니다 (약 1분 후 자동 완료).';
   } catch (e) {
     throw new Error('갱신 중 오류 발생: ' + e.message);
