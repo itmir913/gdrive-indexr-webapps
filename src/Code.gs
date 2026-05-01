@@ -482,13 +482,18 @@ function evaluate(node) {
     return new Set(getFileIdsForKeyword(node.value));
   }
   if (node.type === 'AND') {
-    return intersect(evaluate(node.left), evaluate(node.right));
+    const leftSet = evaluate(node.left);
+    // 단축 평가: 왼쪽 결과가 없으면 오른쪽은 검색(API 호출)조차 하지 않음!
+    if (leftSet.size === 0) return new Set();
+    return intersect(leftSet, evaluate(node.right));
   }
   if (node.type === 'OR') {
     return union(evaluate(node.left), evaluate(node.right));
   }
   if (node.type === 'NOT') {
-    return difference(getAllFileIds(), evaluate(node.operand));
+    const leftSet = evaluate(node.left);
+    if (leftSet.size === 0) return new Set();
+    return difference(leftSet, evaluate(node.right));
   }
   return new Set();
 }
