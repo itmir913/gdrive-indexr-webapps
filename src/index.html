@@ -227,7 +227,7 @@
 
   <div class="search-wrapper">
     <input type="text" id="searchInput" placeholder="검색어를 입력하세요 (예: 서울대 수시)"
-           onkeypress="if(event.key === 'Enter') doSearchUI()">
+           onkeydown="if(event.key === 'Enter') doSearchUI()">
     <button id="searchBtn" onclick="doSearchUI()">검색</button>
   </div>
 
@@ -272,7 +272,7 @@
       인덱스를 즉시 갱신하려면 비밀번호를 입력하세요.
     </p>
     <input type="password" id="adminPw" placeholder="비밀번호 입력"
-           onkeypress="if(event.key === 'Enter') requestRebuild()">
+           onkeydown="if(event.key === 'Enter') requestRebuild()">
     <div class="modal-btns">
       <button class="btn-cancel" onclick="closeModal()">취소</button>
       <button class="btn-confirm" id="confirmBtn" onclick="requestRebuild()">갱신 시작</button>
@@ -368,7 +368,7 @@
 
   function handleError(error) {
     searchBtn.disabled = false;
-    guideBoxDiv.style.display = 'none';
+    guideBoxDiv.style.display = 'block';
     statusDiv.innerHTML = `<div class="error-msg">오류가 발생했습니다: ${escHtml(error.message || error)}</div>`;
     resultsDiv.innerHTML = '';
   }
