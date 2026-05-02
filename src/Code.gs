@@ -534,8 +534,11 @@ function tokenize(query) {
   const s = query.trim();
   const n = s.length;
 
+  function isSpace(c)  { return c === ' ' || c === '\t'; }
+  function isBound(c)  { return c === '(' || c === ')'; }
+
   while (i < n) {
-    while (i < n && s[i] === ' ') i++;
+    while (i < n && isSpace(s[i])) i++;
     if (i >= n) break;
 
     if (s[i] === '(') { tokens.push({ type: 'LPAREN', value: '(' }); i++; continue; }
@@ -543,7 +546,7 @@ function tokenize(query) {
 
     // 첫 단어 읽기
     const start = i;
-    while (i < n && s[i] !== ' ' && s[i] !== '(' && s[i] !== ')') i++;
+    while (i < n && !isSpace(s[i]) && !isBound(s[i])) i++;
     const word = s.slice(start, i);
     const upper = word.toUpperCase();
 
@@ -555,17 +558,17 @@ function tokenize(query) {
     let kw = word;
     while (i < n) {
       let j = i;
-      while (j < n && s[j] === ' ') j++;
-      if (j >= n || s[j] === '(' || s[j] === ')') break;
+      while (j < n && isSpace(s[j])) j++;
+      if (j >= n || isBound(s[j])) break;
       let k = j;
-      while (k < n && s[k] !== ' ' && s[k] !== '(' && s[k] !== ')') k++;
+      while (k < n && !isSpace(s[k]) && !isBound(s[k])) k++;
       const next = s.slice(j, k).toUpperCase();
       if (next === 'AND' || next === 'OR' || next === 'NOT') break;
-      kw += s.slice(i, k); // 공백 + 다음 단어 포함
+      kw += ' ' + s.slice(j, k); // 단어만 추가 (공백은 단일 공백으로 정규화)
       i = k;
     }
 
-    tokens.push({ type: 'KEYWORD', value: kw.toLowerCase().replace(/\s+/g, ' ') });
+    tokens.push({ type: 'KEYWORD', value: kw.toLowerCase() });
   }
 
   return tokens;
