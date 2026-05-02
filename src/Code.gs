@@ -176,12 +176,13 @@ function doSearch(query) {
   const tokens = tokenize(query);
 
   // 로깅용 키워드 추출 (연산자·괄호 제외, 중복 제거)
+  const OPERATORS = { AND: true, OR: true, NOT: true, '(': true, ')': true };
   const keywords = [...new Set(
-    tokens.filter(t => t.type === 'KEYWORD').map(t => t.value)
+    tokens.filter(function(t) { return !OPERATORS[t]; })
   )];
   try { logKeywords(keywords); } catch (e) { Logger.log('logKeywords error: ' + e.message); }
 
-  const tree      = buildExpressionTree(tokens);
+  const tree      = new BooleanParser(tokens).parse();
   const resultSet = evaluate(tree);
   if (resultSet.size === 0) return [];
 
@@ -334,7 +335,6 @@ function driveFullTextSearch(keyword) {
   return ids;
 }
 
-// ── fileId 배열 → 메타데이터 조회 (FILE_INDEX_SHEET) ──────────────────────────────────
 // ── fileId 배열 → 메타데이터 조회 (메모리 캐싱 적용) ──────────────────────────────────
 function lookupMetadata(fileIds) {
   if (!fileIds || fileIds.length === 0) return [];
@@ -532,108 +532,129 @@ function _computeSHA256(str) {
 
 // ── Boolean 쿼리 파서 ────────────────────────────────────────────────────────
 
+/**
+ * 쿼리 문자열을 토큰 문자열 배열로 변환한다.
+ * 연산자/괄호: "AND", "OR", "NOT", "(", ")"
+ * 그 외 (공백 포함 가능): 키워드 (소문자화)
+ *
+ * 예) '서울 대학교  and  (면접 or 실기)'
+ *   → ['서울 대학교', 'AND', '(', '면접', 'OR', '실기', ')']
+ */
 function tokenize(query) {
-  const tokens = [];
-  let i = 0;
-  const s = query.trim();
-  const n = s.length;
+  // Step 1: 연속 공백 정규화
+  query = query.replace(/\s{2,}/g, ' ').trim();
+  if (!query) return [];
 
-  function isSpace(c)  { return c === ' ' || c === '\t'; }
-  function isBound(c)  { return c === '(' || c === ')'; }
+  // Step 2: 연산자·괄호 앞뒤에 구분자 삽입 후 분리
+  query = query.replace(/\s*(and|or|not)\s*/gi, '|||$1|||');
+  query = query.replace(/\s*([()])\s*/g, '|||$1|||');
 
-  while (i < n) {
-    while (i < n && isSpace(s[i])) i++;
-    if (i >= n) break;
+  // Step 3: 분리 → 공백 제거 → 빈 문자열 제거
+  var parts = query.split('|||');
+  var tokens = [];
+  for (var i = 0; i < parts.length; i++) {
+    var t = parts[i].trim();
+    if (t.length === 0) continue;
 
-    if (s[i] === '(') { tokens.push({ type: 'LPAREN', value: '(' }); i++; continue; }
-    if (s[i] === ')') { tokens.push({ type: 'RPAREN', value: ')' }); i++; continue; }
-
-    // 첫 단어 읽기
-    const start = i;
-    while (i < n && !isSpace(s[i]) && !isBound(s[i])) i++;
-    const word = s.slice(start, i);
-    const upper = word.toUpperCase();
-
-    if (upper === 'AND') { tokens.push({ type: 'AND', value: 'AND' }); continue; }
-    if (upper === 'OR')  { tokens.push({ type: 'OR',  value: 'OR'  }); continue; }
-    if (upper === 'NOT') { tokens.push({ type: 'NOT', value: 'NOT' }); continue; }
-
-    // 키워드: 다음 단어가 AND/OR/NOT/괄호가 아닌 한 공백째 이어붙임
-    let kw = word;
-    while (i < n) {
-      let j = i;
-      while (j < n && isSpace(s[j])) j++;
-      if (j >= n || isBound(s[j])) break;
-      let k = j;
-      while (k < n && !isSpace(s[k]) && !isBound(s[k])) k++;
-      const next = s.slice(j, k).toUpperCase();
-      if (next === 'AND' || next === 'OR' || next === 'NOT') break;
-      kw += ' ' + s.slice(j, k); // 단어만 추가 (공백은 단일 공백으로 정규화)
-      i = k;
+    // Step 4: 연산자 대문자 정규화, 키워드 소문자화
+    var upper = t.toUpperCase();
+    if (upper === 'AND' || upper === 'OR' || upper === 'NOT') {
+      tokens.push(upper);
+    } else if (t === '(' || t === ')') {
+      tokens.push(t);
+    } else {
+      tokens.push(t.toLowerCase());
     }
-
-    tokens.push({ type: 'KEYWORD', value: kw.toLowerCase() });
   }
-
   return tokens;
 }
 
-function buildExpressionTree(tokens) {
-  let pos = 0;
+/**
+ * 토큰 배열을 받아 AST를 생성하는 Recursive Descent Parser.
+ * 우선순위: NOT > AND > OR (높을수록 먼저 결합)
+ *
+ * 사용법: new BooleanParser(tokens).parse()
+ */
+function BooleanParser(tokens) {
+  this.tokens = tokens;
+  this.pos = 0;
+}
 
-  function peek()    { return pos < tokens.length ? tokens[pos] : null; }
-  function consume() { return tokens[pos++]; }
+BooleanParser.prototype.peek = function() {
+  return this.pos < this.tokens.length ? this.tokens[this.pos] : null;
+};
 
-  function parseExpr() {
-    let left = parseTerm();
-    while (peek() && peek().type === 'OR') {
-      consume();
-      const right = parseTerm();
-      left = { type: 'OR', left, right };
+BooleanParser.prototype.consume = function() {
+  return this.tokens[this.pos++];
+};
+
+/** 진입점: OR 레벨부터 파싱 */
+BooleanParser.prototype.parse = function() {
+  var node = this.parseOr();
+  return node || { type: 'EMPTY' };
+};
+
+/** OR (최저 우선순위) */
+BooleanParser.prototype.parseOr = function() {
+  var left = this.parseAnd();
+  while (this.peek() === 'OR') {
+    this.consume();
+    var right = this.parseAnd();
+    left = { type: 'OR', left: left, right: right };
+  }
+  return left;
+};
+
+/** AND (명시적 AND 토큰 또는 NOT이 이항처럼 쓰인 경우 묵시적 AND 처리) */
+BooleanParser.prototype.parseAnd = function() {
+  var left = this.parseNot();
+  for (;;) {
+    var t = this.peek();
+    if (t === 'AND') {
+      this.consume(); // 명시적 AND
+    } else if (t === 'NOT') {
+      // 묵시적 AND: "X NOT Y" → AND(X, NOT Y)
+    } else {
+      break;
     }
-    return left;
+    var right = this.parseNot();
+    left = { type: 'AND', left: left, right: right };
+  }
+  return left;
+};
+
+/** NOT (단항, 우결합) */
+BooleanParser.prototype.parseNot = function() {
+  if (this.peek() === 'NOT') {
+    this.consume();
+    return { type: 'NOT', operand: this.parseNot() };
+  }
+  return this.parsePrimary();
+};
+
+/** 괄호 그룹 또는 단일 키워드 */
+BooleanParser.prototype.parsePrimary = function() {
+  var tok = this.peek();
+  if (tok === null) return { type: 'EMPTY' };
+
+  if (tok === '(') {
+    this.consume();
+    var node = this.parseOr();
+    // 닫는 괄호가 있으면 소비, 없으면 자동으로 닫힌 것으로 간주
+    if (this.peek() === ')') this.consume();
+    return node;
   }
 
-  function parseTerm() {
-    let left = parseFactor();
-    while (peek() && peek().type === 'AND') {
-      consume();
-      if (!peek() || peek().type === 'OR' || peek().type === 'RPAREN') break;
-      const right = parseFactor();
-      left = { type: 'AND', left, right };
-    }
-    return left;
-  }
-
-  function parseFactor() {
-    if (peek() && peek().type === 'NOT') {
-      consume();
-      return { type: 'NOT', operand: parseFactor() };
-    }
-    return parseAtom();
-  }
-
-  function parseAtom() {
-    const tok = peek();
-    if (!tok) return { type: 'EMPTY' };
-
-    if (tok.type === 'LPAREN') {
-      consume();
-      const node = parseExpr();
-      if (peek() && peek().type === 'RPAREN') consume();
-      return node;
-    }
-    if (tok.type === 'KEYWORD') {
-      consume();
-      return { type: 'KEYWORD', value: tok.value };
-    }
-    // 예상치 못한 토큰 (연산자만 있는 경우 등)
-    consume();
+  // 연산자가 단독으로 나타나는 경우 (잘못된 입력): EMPTY 반환
+  if (tok === 'AND' || tok === 'OR' || tok === 'NOT' || tok === ')') {
+    this.consume();
     return { type: 'EMPTY' };
   }
 
-  return parseExpr();
-}
+  // 일반 키워드
+  this.consume();
+  return { type: 'KEYWORD', value: tok };
+};
 
 function evaluate(node) {
   if (!node || node.type === 'EMPTY') return new Set();
@@ -642,8 +663,8 @@ function evaluate(node) {
     return new Set(getFileIdsForKeyword(node.value));
   }
   if (node.type === 'AND') {
-    const leftSet = evaluate(node.left);
-    // 단축 평가: 왼쪽 결과가 없으면 오른쪽은 검색(API 호출)조차 하지 않음!
+    var leftSet = evaluate(node.left);
+    // 단축 평가: 왼쪽이 비면 오른쪽 API 호출 생략
     if (leftSet.size === 0) return new Set();
     return intersect(leftSet, evaluate(node.right));
   }
@@ -651,8 +672,8 @@ function evaluate(node) {
     return union(evaluate(node.left), evaluate(node.right));
   }
   if (node.type === 'NOT') {
-    const allIds = getAllFileIds();
-    const excludeSet = evaluate(node.operand);
+    var allIds = getAllFileIds();
+    var excludeSet = evaluate(node.operand);
     return difference(allIds, excludeSet);
   }
   return new Set();
@@ -660,17 +681,168 @@ function evaluate(node) {
 
 // ── 집합 연산 헬퍼 ───────────────────────────────────────────────────────────
 function intersect(a, b) {
-  return new Set([...a].filter(id => b.has(id)));
+  var result = new Set();
+  a.forEach(function(id) { if (b.has(id)) result.add(id); });
+  return result;
 }
 
 function union(a, b) {
-  return new Set([...a, ...b]);
+  var result = new Set();
+  a.forEach(function(id) { result.add(id); });
+  b.forEach(function(id) { result.add(id); });
+  return result;
 }
 
 function difference(a, b) {
-  return new Set([...a].filter(id => !b.has(id)));
+  var result = new Set();
+  a.forEach(function(id) { if (!b.has(id)) result.add(id); });
+  return result;
 }
 
 function getAllFileIds() {
   return new Set(Object.keys(getCachedMetadataMap()));
+}
+
+// ── 테스트 스위트 (Apps Script 에디터에서 직접 실행) ─────────────────────────
+function testBooleanParser() {
+  var pass = 0;
+  var fail = 0;
+
+  function astToString(node) {
+    if (!node || node.type === 'EMPTY') return 'EMPTY';
+    if (node.type === 'KEYWORD') return node.value;
+    if (node.type === 'NOT') return '(NOT ' + astToString(node.operand) + ')';
+    return '(' + astToString(node.left) + ' ' + node.type + ' ' + astToString(node.right) + ')';
+  }
+
+  function check(label, input, expected) {
+    var tokens = tokenize(input);
+    var ast = new BooleanParser(tokens).parse();
+    var got = astToString(ast);
+    if (got === expected) {
+      Logger.log('PASS: ' + label);
+      pass++;
+    } else {
+      Logger.log('FAIL: ' + label + '\n  input:    ' + input + '\n  expected: ' + expected + '\n  got:      ' + got);
+      fail++;
+    }
+  }
+
+  // 기본 케이스
+  check('단일 키워드',          'A',                    'a');
+  check('AND 기본',             'A AND B',              '(a AND b)');
+  check('OR 기본',              'A OR B',               '(a OR b)');
+  check('NOT 기본',             'NOT A',                '(NOT a)');
+
+  // 우선순위
+  check('NOT > AND',            'NOT A AND B',          '((NOT a) AND b)');
+  check('AND > OR',             'A OR B AND C',         '(a OR (b AND c))');
+  check('NOT > AND > OR',       'A OR NOT B AND C',     '(a OR ((NOT b) AND c))');
+
+  // 괄호
+  check('괄호 우선순위',         '(A OR B) AND C',       '((a OR b) AND c)');
+  check('중첩 괄호',            '((A OR B) AND C) OR D','(((a OR b) AND c) OR d)');
+  check('NOT + 괄호',           'NOT (A OR B)',         '(NOT (a OR b))');
+
+  // 공백 포함 키워드
+  check('공백 포함 AND',         '서울 대학교 AND 면접',   '(서울 대학교 AND 면접)');
+  check('긴 키워드 + 연산자',    '서울 대학교의 입시 정보 and 면접', '(서울 대학교의 입시 정보 AND 면접)');
+  check('한국어 혼합 연산자',    '(영어 OR 수학) NOT 강남','((영어 OR 수학) AND (NOT 강남))');
+
+  // 연속 공백 정규화
+  check('연속 공백',            '대학  입시  정보',       '대학 입시 정보');
+  check('연산자 주변 공백',      '서울  AND  면접',        '(서울 AND 면접)');
+
+  // 연결성
+  check('좌결합 AND',           'A AND B AND C',        '((a AND b) AND c)');
+  check('이중 부정',            'NOT NOT A',            '(NOT (NOT a))');
+
+  // 오류 허용
+  check('괄호 미닫힘 (자동 닫기)', '(A AND B',           '(a AND b)');
+  check('빈 입력',              '',                     'EMPTY');
+  check('단독 연산자',           'AND',                  'EMPTY');
+
+  Logger.log('──────────────────────────');
+  Logger.log('결과: ' + pass + '개 통과 / ' + fail + '개 실패');
+  if (fail > 0) throw new Error(fail + '개 테스트 실패');
+}
+
+// ── Drive 검색 통합 테스트 (Apps Script 에디터에서 직접 실행) ─────────────────
+/**
+ * 실제 Drive API를 호출해 파서 → 평가 → 결과 반환 전 흐름을 검증한다.
+ *
+ * 실행 전 준비:
+ *   1. 아래 INTEGRATION_KEYWORD 를 실제로 드라이브에 존재하는 파일명/내용의 단어로 교체
+ *   2. Apps Script 편집기에서 testDriveIntegration 선택 후 ▶ 실행
+ */
+function testDriveIntegration() {
+  // ── 여기에 실제 드라이브에 존재하는 키워드 입력 ──────────────────────────
+  var KEYWORD_A = '논술';   // 결과가 있어야 하는 키워드
+  var KEYWORD_B = '면접';   // 결과가 있어야 하는 키워드
+  var KEYWORD_FAKE = 'zzz_절대없는키워드_xqz'; // 결과가 0이어야 하는 키워드
+  // ────────────────────────────────────────────────────────────────────────
+
+  var results;
+
+  // 1. 단일 키워드 검색
+  Logger.log('=== 1. 단일 키워드: ' + KEYWORD_A + ' ===');
+  results = doSearch(KEYWORD_A);
+  Logger.log('결과 수: ' + results.length);
+  if (results.length === 0) Logger.log('  ⚠ 결과 없음 — 키워드를 실제 파일명/내용으로 교체하세요');
+  else Logger.log('  첫 번째 파일: ' + results[0].name + ' (' + results[0].url + ')');
+
+  // 2. AND 검색 — 두 키워드 모두 포함된 파일만
+  Logger.log('=== 2. AND: ' + KEYWORD_A + ' AND ' + KEYWORD_B + ' ===');
+  results = doSearch(KEYWORD_A + ' AND ' + KEYWORD_B);
+  Logger.log('결과 수: ' + results.length + '  (단일 결과보다 적거나 같아야 함)');
+
+  // 3. OR 검색 — 어느 한 쪽만 있어도 포함
+  Logger.log('=== 3. OR: ' + KEYWORD_A + ' OR ' + KEYWORD_B + ' ===');
+  var orCount = doSearch(KEYWORD_A + ' OR ' + KEYWORD_B).length;
+  var aCount  = doSearch(KEYWORD_A).length;
+  var bCount  = doSearch(KEYWORD_B).length;
+  Logger.log('OR 결과: ' + orCount + ' / A 단독: ' + aCount + ' / B 단독: ' + bCount);
+  if (orCount < aCount || orCount < bCount) {
+    Logger.log('  ✗ FAIL: OR 결과가 단독 검색보다 작음');
+  } else {
+    Logger.log('  ✓ PASS');
+  }
+
+  // 4. NOT 검색 — KEYWORD_A 있고 KEYWORD_B 없는 파일
+  Logger.log('=== 4. NOT: ' + KEYWORD_A + ' NOT ' + KEYWORD_B + ' ===');
+  var notCount = doSearch(KEYWORD_A + ' NOT ' + KEYWORD_B).length;
+  Logger.log('NOT 결과: ' + notCount + '  (AND 결과보다 적거나 같아야 함)');
+
+  // 5. 존재하지 않는 키워드 → 반드시 0
+  Logger.log('=== 5. 가짜 키워드: ' + KEYWORD_FAKE + ' ===');
+  results = doSearch(KEYWORD_FAKE);
+  if (results.length === 0) Logger.log('  ✓ PASS: 결과 0개');
+  else Logger.log('  ✗ FAIL: 가짜 키워드인데 결과가 ' + results.length + '개');
+
+  // 6. 존재하지 않는 키워드 AND 실제 키워드 → 단축 평가로 0
+  Logger.log('=== 6. 단축 평가: ' + KEYWORD_FAKE + ' AND ' + KEYWORD_A + ' ===');
+  results = doSearch(KEYWORD_FAKE + ' AND ' + KEYWORD_A);
+  if (results.length === 0) Logger.log('  ✓ PASS: 단축 평가 정상 동작');
+  else Logger.log('  ✗ FAIL: 결과가 ' + results.length + '개');
+
+  // 7. 괄호 포함 복합 쿼리
+  Logger.log('=== 7. 복합: (' + KEYWORD_A + ' OR ' + KEYWORD_B + ') NOT ' + KEYWORD_FAKE + ' ===');
+  results = doSearch('(' + KEYWORD_A + ' OR ' + KEYWORD_B + ') NOT ' + KEYWORD_FAKE);
+  Logger.log('결과 수: ' + results.length + '  (3번 OR 결과와 같아야 함, 가짜 키워드는 아무것도 제거 안 함)');
+
+  // 8. (인문계 OR 자연계) AND 서울대
+  Logger.log('=== 8. 복합: (인문계 OR 자연계) AND 서울대 ===');
+  var humanCount   = doSearch('인문계').length;
+  var naturalCount = doSearch('자연계').length;
+  var snu          = doSearch('서울대').length;
+  var combined     = doSearch('(인문계 OR 자연계) AND 서울대').length;
+  Logger.log('인문계: ' + humanCount + ' / 자연계: ' + naturalCount + ' / 서울대: ' + snu);
+  Logger.log('(인문계 OR 자연계) AND 서울대: ' + combined);
+  if (combined <= humanCount + naturalCount && combined <= snu) {
+    Logger.log('  ✓ PASS');
+  } else {
+    Logger.log('  ✗ FAIL: AND 결과가 각 단독 결과보다 큼');
+  }
+
+  Logger.log('=== 통합 테스트 완료 ===');
 }
