@@ -110,26 +110,30 @@ function _rebuildMetadataIndexImpl() {
   cache.remove('meta_chunk_count');
   try {
     const kwSheet = ss.getSheetByName(KEYWORD_LOG_SHEET);
-    const kwLastRow = kwSheet.getLastRow();
-    if (kwLastRow >= 2) {
-      const kwData = kwSheet.getRange(2, 1, kwLastRow - 1, 1).getValues();
-      const nKeys = kwData
-        .map(r => String(r[0] ?? '').toLowerCase().trim())
-        .filter(kw => kw)
-        .map(kw => 'kw_' + kw + '_n');
+    if (!kwSheet) {
+      Logger.log('키워드 캐시 무효화 생략: KeywordLog 시트를 찾을 수 없음');
+    } else {
+      const kwLastRow = kwSheet.getLastRow();
+      if (kwLastRow >= 2) {
+        const kwData = kwSheet.getRange(2, 1, kwLastRow - 1, 1).getValues();
+        const nKeys = kwData
+          .map(r => String(r[0] ?? '').toLowerCase().trim())
+          .filter(kw => kw)
+          .map(kw => 'kw_' + kw + '_n');
 
-      if (nKeys.length > 0) {
-        const nValues = _batchGetAll(cache, nKeys); // 청크 수 일괄 조회 (500개 배치)
-        const allKeys = [];
-        nKeys.forEach(nKey => {
-          allKeys.push(nKey);
-          const count = parseInt(nValues[nKey], 10);
-          if (count > 0) {
-            const base = nKey.slice(0, -2); // 'kw_<keyword>' 추출 (_n 제거)
-            for (let i = 0; i < count; i++) allKeys.push(base + '_' + i);
-          }
-        });
-        _batchRemoveAll(cache, allKeys); // 500개 배치
+        if (nKeys.length > 0) {
+          const nValues = _batchGetAll(cache, nKeys); // 청크 수 일괄 조회 (500개 배치)
+          const allKeys = [];
+          nKeys.forEach(nKey => {
+            allKeys.push(nKey);
+            const count = parseInt(nValues[nKey], 10);
+            if (count > 0) {
+              const base = nKey.slice(0, -2); // 'kw_<keyword>' 추출 (_n 제거)
+              for (let i = 0; i < count; i++) allKeys.push(base + '_' + i);
+            }
+          });
+          _batchRemoveAll(cache, allKeys); // 500개 배치
+        }
       }
     }
   } catch (e) {
@@ -475,7 +479,12 @@ function purgeStaleKeywords() {
     cutoff.setDate(cutoff.getDate() - 3); // 3일 이상 미검색 키워드 삭제
 
     const data = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
-    const kept = data.filter(row => row[0] && new Date(row[2]) >= cutoff);
+    const kept = data.filter(row => {
+      if (!row[0]) return false;
+      const d = new Date(row[2]);
+      if (isNaN(d.getTime())) return true;  // 날짜 파싱 불가 → 보존
+      return d >= cutoff;
+    });
 
     sheet.getRange(2, 1, lastRow - 1, 3).clearContent();
     if (kept.length > 0) {
