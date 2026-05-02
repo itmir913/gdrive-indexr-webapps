@@ -54,9 +54,29 @@ docker/
 
 > `credentials.json` 은 `.gitignore` 에 의해 git에서 제외됩니다. 절대 공개 저장소에 올리지 마세요.
 
+
+
+
 ---
 
-## 환경변수 설정
+## 배포
+
+### 1단계 — 저장소 클론 및 이동
+
+```bash
+git clone https://github.com/your-repo/gdrive-indexr-webapps.git
+cd gdrive-indexr-webapps/docker
+```
+
+### 2단계 — data 디렉토리 생성 및 credentials.json 배치
+
+```bash
+mkdir -p data
+# GCP에서 다운로드한 파일을 data/credentials.json 으로 복사
+cp /path/to/downloaded-credentials.json data/credentials.json
+```
+
+### 3단계 — 환경변수 설정
 
 ```bash
 cp .env.example .env
@@ -76,13 +96,19 @@ ADMIN_PASSWORD=your_password
 OAUTH_REDIRECT_URI=https://your-domain.com/oauth/callback
 ```
 
----
-
-## 실행
+### 4단계 — 빌드 및 실행
 
 ```bash
-docker compose up --build -d
+docker compose up -d --build
 ```
+
+### 5단계 — 로그 확인
+
+```bash
+docker compose logs -f backend
+```
+
+`[INFO] [Server] 포트 3000에서 가동 중` 메시지가 출력되면 정상 실행된 것입니다.
 
 ---
 
@@ -94,7 +120,7 @@ docker compose up --build -d
 4. 메인 페이지로 돌아오면서 Drive 인덱싱 자동 시작
 5. 헤더의 상태 뱃지가 **정상** 으로 바뀌면 검색 가능
 
-> 로그인 후 `docker/data/token.json` 이 자동 생성됩니다. 이 파일이 있으면 서버 재시작 시 재로그인 없이 인증이 유지됩니다.
+> 로그인 후 `docker/data/token.json` 이 자동 생성됩니다. 이 파일이 있으면 서버 재시작 시 구글 재로그인 없이 인증이 유지됩니다.
 
 ---
 
@@ -117,9 +143,9 @@ NPM이 SSL을 담당하므로 내부 nginx는 HTTP(80)만 사용합니다.
 
 | 방법 | 설명 |
 |------|------|
+| 최초 | OAuth 로그인 직후 자동 실행 |
 | 자동 | 매일 02:00 전체 재인덱싱 |
 | 수동 | 화면 우하단 ⚙️ → 비밀번호 입력 → 갱신 시작 |
-| 최초 | OAuth 로그인 직후 자동 실행 |
 
 ---
 
