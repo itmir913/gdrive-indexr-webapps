@@ -2,7 +2,7 @@
 function tokenize(query) {
     query = query.replace(/\s{2,}/g, ' ').trim();
     if (!query) return [];
-    query = query.replace(/\s*(and|or|not)\s*/gi, '|||$1|||');
+    query = query.replace(/\s*\b(and|or|not)\b\s*/gi, '|||$1|||');
     query = query.replace(/\s*([()])\s*/g, '|||$1|||');
 
     return query.split('|||').map(t => t.trim()).filter(t => t.length > 0).map(t => {

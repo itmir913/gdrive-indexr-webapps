@@ -38,6 +38,7 @@ const log = {
 function initDB() {
     return new Promise((resolve, reject) => {
         db.serialize(() => {
+            db.run('BEGIN TRANSACTION');
             db.run(`
                 CREATE TABLE IF NOT EXISTS file_index (
                     fileId     TEXT PRIMARY KEY,
@@ -46,22 +47,23 @@ function initDB() {
                     url        TEXT NOT NULL,
                     modifiedAt TEXT
                 )
-            `, (err) => { if (err) return reject(err); });
+            `, (err) => { if (err) { db.run('ROLLBACK'); return reject(err); } });
             db.run(`
                 CREATE TABLE IF NOT EXISTS keyword_log (
                     keyword       TEXT PRIMARY KEY,
                     count         INTEGER DEFAULT 1,
                     lastSearchDay TEXT
                 )
-            `, (err) => { if (err) return reject(err); });
+            `, (err) => { if (err) { db.run('ROLLBACK'); return reject(err); } });
             db.run(`
                 CREATE TABLE IF NOT EXISTS keyword_cache (
                     keyword  TEXT PRIMARY KEY,
                     fileIds  TEXT NOT NULL,
                     cachedAt INTEGER NOT NULL
                 )
-            `, (err) => {
-                if (err) return reject(err);
+            `, (err) => { if (err) { db.run('ROLLBACK'); return reject(err); } });
+            db.run('COMMIT', (err) => {
+                if (err) { db.run('ROLLBACK'); return reject(err); }
                 log.info('DB', '스키마 초기화 완료');
                 resolve();
             });
@@ -200,10 +202,15 @@ function getCachedFileIds(keyword) {
 
 // ── 키워드 캐시 저장 ─────────────────────────────────────────────────────────
 function setCachedFileIds(keyword, fileIds) {
-    db.run(
-        'INSERT OR REPLACE INTO keyword_cache (keyword, fileIds, cachedAt) VALUES (?, ?, ?)',
-        [keyword, JSON.stringify(fileIds), Date.now()]
-    );
+    db.serialize(() => {
+        db.run('BEGIN TRANSACTION');
+        db.run(
+            'INSERT OR REPLACE INTO keyword_cache (keyword, fileIds, cachedAt) VALUES (?, ?, ?)',
+            [keyword, JSON.stringify(fileIds), Date.now()],
+            (err) => { if (err) { db.run('ROLLBACK'); return log.error('Cache', `캐시 저장 실패 [${keyword}]: ${err.message}`); } }
+        );
+        db.run('COMMIT');
+    });
 }
 
 // ── 키워드 → fileId 배열 (캐시 → Drive 검색 → 로컬 인덱스 합산) ──────────────
@@ -310,6 +317,7 @@ async function rebuildMetadataIndex() {
 
         await new Promise((resolve, reject) => {
             db.serialize(() => {
+                db.run('BEGIN TRANSACTION');
                 db.run('DELETE FROM file_index');
                 db.run('DELETE FROM keyword_cache');
                 const stmt = db.prepare(
@@ -317,8 +325,14 @@ async function rebuildMetadataIndex() {
                 );
                 for (const row of fileRows) stmt.run(row);
                 stmt.finalize((err) => {
-                    if (err) return reject(err);
-                    resolve();
+                    if (err) {
+                        db.run('ROLLBACK');
+                        return reject(err);
+                    }
+                    db.run('COMMIT', (err) => {
+                        if (err) { db.run('ROLLBACK'); return reject(err); }
+                        resolve();
+                    });
                 });
             });
         });
@@ -341,13 +355,18 @@ function sha256(str) {
 
 // ── OAuth 라우트 ─────────────────────────────────────────────────────────────
 app.get('/api/auth/login', (req, res) => {
-    const oAuth2Client = getOAuthClient();
-    const authUrl = oAuth2Client.generateAuthUrl({
-        access_type: 'offline',
-        scope: ['https://www.googleapis.com/auth/drive.readonly'],
-        prompt: 'consent',
-    });
-    res.redirect(authUrl);
+    try {
+        const oAuth2Client = getOAuthClient();
+        const authUrl = oAuth2Client.generateAuthUrl({
+            access_type: 'offline',
+            scope: ['https://www.googleapis.com/auth/drive.readonly'],
+            prompt: 'consent',
+        });
+        res.redirect(authUrl);
+    } catch (e) {
+        log.error('Auth', `credentials.json 로드 실패: ${e.message}`);
+        res.status(500).send('서버 설정 오류: credentials.json을 확인하세요.');
+    }
 });
 
 app.get('/oauth/callback', async (req, res) => {
@@ -430,13 +449,18 @@ app.get('/api/health', (req, res) => {
 // ── 키워드 로그 ──────────────────────────────────────────────────────────────
 function logKeyword(keyword) {
     const today = new Date().toISOString().split('T')[0];
-    db.run(`
-        INSERT INTO keyword_log (keyword, count, lastSearchDay)
-        VALUES (?, 1, ?)
-        ON CONFLICT(keyword) DO UPDATE SET
-            count = count + 1,
-            lastSearchDay = ?
-    `, [keyword, today, today]);
+    db.serialize(() => {
+        db.run('BEGIN TRANSACTION');
+        db.run(`
+            INSERT INTO keyword_log (keyword, count, lastSearchDay)
+            VALUES (?, 1, ?)
+            ON CONFLICT(keyword) DO UPDATE SET
+                count = count + 1,
+                lastSearchDay = ?
+        `, [keyword, today, today],
+        (err) => { if (err) { db.run('ROLLBACK'); return log.error('Log', `키워드 로그 실패 [${keyword}]: ${err.message}`); } });
+        db.run('COMMIT');
+    });
 }
 
 // ── 만료 키워드 정리 ─────────────────────────────────────────────────────────
@@ -444,12 +468,16 @@ function purgeStaleKeywords() {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - 3);
     const cutoffStr = cutoff.toISOString().split('T')[0];
-    db.run('DELETE FROM keyword_log WHERE lastSearchDay < ?', [cutoffStr],
-        function (err) {
-            if (err) return log.error('Purge', `키워드 정리 실패: ${err.message}`);
-            log.info('Purge', `만료 키워드 ${this.changes}개 삭제`);
-        }
-    );
+    db.serialize(() => {
+        db.run('BEGIN TRANSACTION');
+        db.run('DELETE FROM keyword_log WHERE lastSearchDay < ?', [cutoffStr],
+            function (err) {
+                if (err) { db.run('ROLLBACK'); return log.error('Purge', `키워드 정리 실패: ${err.message}`); }
+                log.info('Purge', `만료 키워드 ${this.changes}개 삭제`);
+            }
+        );
+        db.run('COMMIT');
+    });
 }
 
 // ── Warm Cache ───────────────────────────────────────────────────────────────
