@@ -213,7 +213,7 @@ async function getFileIdsForKeyword(keyword) {
     if (cached !== null) return cached;
 
     const [driveIds, nameIds] = await Promise.all([
-        withRetry(() => driveFullTextSearch(keyword)).catch(e => {
+        driveFullTextSearch(keyword).catch(e => {
             log.error('Drive', `전체 텍스트 검색 실패 [${keyword}]: ${e.message}`);
             return [];
         }),

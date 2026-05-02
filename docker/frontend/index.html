@@ -207,6 +207,35 @@
       color: #9aa0a6;
       cursor: not-allowed;
     }
+
+    /* ── 서버 상태 패널 ── */
+    .server-status {
+      background: #f8f9fa;
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 0.9rem 1rem;
+      margin-bottom: 1.2rem;
+      font-size: 0.88rem;
+      color: var(--text-sub);
+    }
+    .server-status .status-title {
+      font-weight: 700;
+      color: var(--text-main);
+      margin-bottom: 0.5rem;
+      font-size: 0.9rem;
+    }
+    .server-status .status-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 2px 0;
+    }
+    .status-badge {
+      font-weight: 600;
+      font-size: 0.85rem;
+    }
+    .status-badge.ok   { color: #1e8e3e; }
+    .status-badge.warn { color: #f29900; }
+    .status-badge.err  { color: #d93025; }
   </style>
 </head>
 <body>
@@ -264,6 +293,12 @@
 <div id="adminModal" class="modal-overlay">
   <div class="modal">
     <h2>관리자 인증</h2>
+    <div class="server-status" id="serverStatus">
+      <div class="status-title">서버 상태</div>
+      <div class="status-row"><span>인증</span><span class="status-badge" id="statusAuth">조회 중...</span></div>
+      <div class="status-row"><span>인덱스</span><span class="status-badge" id="statusIndex">조회 중...</span></div>
+      <div class="status-row"><span>파일 수</span><span class="status-badge" id="statusCount">-</span></div>
+    </div>
     <p style="font-size: 0.9rem; color: #5f6368; margin-bottom: 1rem;">
       인덱스를 즉시 갱신하려면 비밀번호를 입력하세요.
     </p>
@@ -376,6 +411,33 @@
   function openModal() {
     document.getElementById('adminModal').style.display = 'flex';
     document.getElementById('adminPw').focus();
+    loadServerStatus();
+  }
+
+  function loadServerStatus() {
+    fetch('/api/status')
+      .then(res => res.json())
+      .then(({ authenticated, isIndexing, indexedCount }) => {
+        const authEl  = document.getElementById('statusAuth');
+        const indexEl = document.getElementById('statusIndex');
+        const countEl = document.getElementById('statusCount');
+
+        authEl.textContent  = authenticated ? '인증됨' : '미인증';
+        authEl.className    = 'status-badge ' + (authenticated ? 'ok' : 'err');
+
+        indexEl.textContent = isIndexing ? '진행 중' : '대기';
+        indexEl.className   = 'status-badge ' + (isIndexing ? 'warn' : 'ok');
+
+        countEl.textContent = indexedCount.toLocaleString() + '개';
+        countEl.className   = 'status-badge ok';
+      })
+      .catch(() => {
+        ['statusAuth', 'statusIndex', 'statusCount'].forEach(id => {
+          const el = document.getElementById(id);
+          el.textContent = '조회 실패';
+          el.className = 'status-badge err';
+        });
+      });
   }
 
   function closeModal() {
