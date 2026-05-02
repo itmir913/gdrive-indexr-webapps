@@ -1,5 +1,6 @@
 require('dotenv').config();
 
+const fs = require('fs');
 const express = require('express');
 const { google } = require('googleapis');
 const sqlite3 = require('sqlite3').verbose();
@@ -12,14 +13,17 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const PORT                   = process.env.PORT || 3000;
-const FOLDER_ID              = process.env.FOLDER_ID;
-const ADMIN_PASSWORD         = process.env.ADMIN_PASSWORD;
-const SERVICE_ACCOUNT_KEY_PATH = process.env.SERVICE_ACCOUNT_KEY_PATH || '/app/data/service-account.json';
-const PRECACHE_TOP_N         = 100;
-const CACHE_TTL_MS           = 6 * 60 * 60 * 1000; // 6시간
-const RETRY_COUNT            = 3;
-const RETRY_DELAY_MS         = 500;
+const PORT              = process.env.PORT || 3000;
+const FOLDER_ID         = process.env.FOLDER_ID;
+const ADMIN_PASSWORD    = process.env.ADMIN_PASSWORD;
+const OAUTH_REDIRECT_URI = process.env.OAUTH_REDIRECT_URI || 'http://localhost/oauth/callback';
+const PRECACHE_TOP_N    = 100;
+const CACHE_TTL_MS      = 6 * 60 * 60 * 1000;
+const RETRY_COUNT       = 3;
+const RETRY_DELAY_MS    = 500;
+
+const CREDENTIALS_PATH = '/app/data/credentials.json';
+const TOKEN_PATH       = '/app/data/token.json';
 
 const db = new sqlite3.Database('/app/data/database.sqlite');
 let fileIndexCache = new Map();
@@ -67,13 +71,29 @@ function initDB() {
     });
 }
 
-// ── Google Drive 인증 ────────────────────────────────────────────────────────
+// ── OAuth 인증 ───────────────────────────────────────────────────────────────
+function isAuthenticated() {
+    return fs.existsSync(TOKEN_PATH);
+}
+
+function getOAuthClient() {
+    const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH));
+    const { client_secret, client_id } = credentials.installed || credentials.web;
+    return new google.auth.OAuth2(client_id, client_secret, OAUTH_REDIRECT_URI);
+}
+
 function getDriveClient() {
-    const auth = new google.auth.GoogleAuth({
-        keyFile: SERVICE_ACCOUNT_KEY_PATH,
-        scopes: ['https://www.googleapis.com/auth/drive.readonly'],
+    const oAuth2Client = getOAuthClient();
+    const token = JSON.parse(fs.readFileSync(TOKEN_PATH));
+    oAuth2Client.setCredentials(token);
+
+    oAuth2Client.on('tokens', (tokens) => {
+        const current = JSON.parse(fs.readFileSync(TOKEN_PATH));
+        fs.writeFileSync(TOKEN_PATH, JSON.stringify({ ...current, ...tokens }, null, 2));
+        log.info('Auth', 'access_token 갱신 완료');
     });
-    return google.drive({ version: 'v3', auth });
+
+    return google.drive({ version: 'v3', auth: oAuth2Client });
 }
 
 // ── 재시도 헬퍼 (지수 백오프) ─────────────────────────────────────────────────
@@ -191,8 +211,12 @@ function extractKeywords(node) {
     return new Set([...extractKeywords(node.left), ...extractKeywords(node.right)]);
 }
 
-// ── 인덱스 재빌드 (Google Drive API BFS 탐색) ────────────────────────────────
+// ── 인덱스 재빌드 ────────────────────────────────────────────────────────────
 async function rebuildMetadataIndex() {
+    if (!isAuthenticated()) {
+        log.warn('Index', '인증되지 않음, 인덱싱 건너뜀');
+        return 'unauthenticated';
+    }
     if (isIndexing) {
         log.warn('Index', '이미 실행 중, 건너뜀');
         return 'skipped';
@@ -266,7 +290,7 @@ async function rebuildMetadataIndex() {
         await new Promise((resolve, reject) => {
             db.serialize(() => {
                 db.run('DELETE FROM file_index');
-                db.run('DELETE FROM keyword_cache'); // 인덱스 갱신 시 키워드 캐시 무효화
+                db.run('DELETE FROM keyword_cache');
                 const stmt = db.prepare(
                     'INSERT OR REPLACE INTO file_index (fileId, name, path, url, modifiedAt) VALUES (?, ?, ?, ?, ?)'
                 );
@@ -294,6 +318,39 @@ function sha256(str) {
     return crypto.createHash('sha256').update(str, 'utf8').digest('hex');
 }
 
+// ── OAuth 라우트 ─────────────────────────────────────────────────────────────
+app.get('/api/auth/status', (req, res) => {
+    res.json({ authenticated: isAuthenticated() });
+});
+
+app.get('/api/auth/login', (req, res) => {
+    const oAuth2Client = getOAuthClient();
+    const authUrl = oAuth2Client.generateAuthUrl({
+        access_type: 'offline',
+        scope: ['https://www.googleapis.com/auth/drive.readonly'],
+        prompt: 'consent',
+    });
+    res.redirect(authUrl);
+});
+
+app.get('/oauth/callback', async (req, res) => {
+    const code = req.query.code;
+    if (!code) return res.status(400).send('인증 코드가 없습니다.');
+
+    try {
+        const oAuth2Client = getOAuthClient();
+        const { tokens } = await oAuth2Client.getToken(code);
+        fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens, null, 2));
+        log.info('Auth', 'OAuth 인증 완료, token.json 저장');
+
+        rebuildMetadataIndex().catch(e => log.error('Index', e.message));
+        res.redirect('/');
+    } catch (e) {
+        log.error('Auth', `OAuth 콜백 오류: ${e.message}`);
+        res.status(500).send('인증에 실패했습니다. 다시 시도하세요.');
+    }
+});
+
 // ── 검색 API ─────────────────────────────────────────────────────────────────
 app.get('/api/search', async (req, res) => {
     const query = (req.query.q || '').trim();
@@ -302,22 +359,15 @@ app.get('/api/search', async (req, res) => {
     try {
         const tokens = tokenize(query);
         const tree = new BooleanParser(tokens).parse();
-
-        // 1. AST에서 키워드 추출
         const keywords = [...extractKeywords(tree)];
-
-        // 2. 키워드별 fileId 병렬 조회 (캐시 → Drive + 로컬 인덱스)
         const fileIdArrays = await Promise.all(keywords.map(kw => getFileIdsForKeyword(kw)));
 
-        // 3. keyword → Set 맵 구성
         const keywordMap = new Map();
         keywords.forEach((kw, i) => keywordMap.set(kw, new Set(fileIdArrays[i])));
 
-        // 4. AST 평가
         const allIds = new Set(fileIndexCache.keys());
         const resultSet = evaluate(tree, keywordMap, allIds);
 
-        // 5. 메타데이터 조회 및 정렬
         const results = Array.from(resultSet)
             .map(id => fileIndexCache.get(id))
             .filter(Boolean)
@@ -339,7 +389,6 @@ app.post('/api/rebuild', (req, res) => {
         log.warn('Admin', '인덱스 재빌드 요청 — 비밀번호 불일치');
         return res.status(401).json({ error: '비밀번호가 올바르지 않습니다.' });
     }
-
     if (isIndexing) {
         log.warn('Admin', '인덱스 재빌드 요청 — 이미 진행 중');
         return res.status(409).json({ message: '인덱싱이 이미 진행 중입니다.' });
@@ -347,12 +396,12 @@ app.post('/api/rebuild', (req, res) => {
 
     log.info('Admin', '인덱스 재빌드 요청 수락');
     res.status(202).json({ message: '인덱싱을 시작합니다.' });
-    rebuildMetadataIndex().catch(e => log.error('Index', `비동기 인덱싱 오류: ${e.message}`));
+    rebuildMetadataIndex().catch(e => log.error('Index', e.message));
 });
 
-// ── 어드민: 인덱싱 상태 조회 ─────────────────────────────────────────────────
+// ── 어드민: 상태 조회 ────────────────────────────────────────────────────────
 app.get('/api/status', (req, res) => {
-    res.json({ isIndexing, indexedCount: fileIndexCache.size });
+    res.json({ isIndexing, indexedCount: fileIndexCache.size, authenticated: isAuthenticated() });
 });
 
 // ── 키워드 로그 ──────────────────────────────────────────────────────────────
@@ -367,14 +416,12 @@ function logKeyword(keyword) {
     `, [keyword, today, today]);
 }
 
-// ── 만료 키워드 정리 (3일 미검색 삭제) ──────────────────────────────────────
+// ── 만료 키워드 정리 ─────────────────────────────────────────────────────────
 function purgeStaleKeywords() {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - 3);
     const cutoffStr = cutoff.toISOString().split('T')[0];
-    db.run(
-        'DELETE FROM keyword_log WHERE lastSearchDay < ?',
-        [cutoffStr],
+    db.run('DELETE FROM keyword_log WHERE lastSearchDay < ?', [cutoffStr],
         function (err) {
             if (err) return log.error('Purge', `키워드 정리 실패: ${err.message}`);
             log.info('Purge', `만료 키워드 ${this.changes}개 삭제`);
@@ -393,8 +440,7 @@ function warmCache() {
             for (const { keyword } of rows) {
                 const tokens = tokenize(keyword);
                 const tree = new BooleanParser(tokens).parse();
-                const keywords = [...extractKeywords(tree)];
-                keywords.forEach(kw => getNameMatches(kw));
+                [...extractKeywords(tree)].forEach(kw => getNameMatches(kw));
                 warmed++;
             }
             log.info('WarmCache', `${warmed}개 키워드 완료`);
@@ -413,6 +459,9 @@ initDB()
     .then(() => {
         app.listen(PORT, () => {
             log.info('Server', `포트 ${PORT}에서 가동 중`);
+            if (!isAuthenticated()) {
+                log.warn('Auth', '미인증 상태 — http://your-domain/api/auth/login 접속하여 인증하세요');
+            }
         });
     })
     .then(() => rebuildMetadataIndex())

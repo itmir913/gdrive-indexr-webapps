@@ -283,6 +283,14 @@
   const resultsDiv = document.getElementById('results');
   const guideBoxDiv = document.getElementById('guide-box');
 
+  // 인증 확인
+  fetch('/api/auth/status')
+    .then(res => res.json())
+    .then(({ authenticated }) => {
+      if (!authenticated) window.location.href = '/api/auth/login';
+    })
+    .catch(() => {});
+
   function escHtml(str) {
     if (!str) return '';
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
