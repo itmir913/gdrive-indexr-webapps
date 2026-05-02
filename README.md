@@ -44,11 +44,12 @@ https://drive.google.com/drive/folders/[여기가 ID]
 
 ### 4단계 — 상수 값 교체
 
-`Code.gs` 파일 상단의 두 상수를 실제 값으로 교체합니다.
+`Code.gs` 파일 상단의 세 상수를 실제 값으로 교체합니다.
 
 ```js
-const FOLDER_ID      = 'your_root_folder_id';   // 2단계에서 복사한 폴더 ID
 const INDEX_SHEET_ID = 'your_spreadsheet_id';   // 1단계에서 복사한 스프레드시트 ID
+const FOLDER_ID      = 'your_root_folder_id';   // 2단계에서 복사한 구글 드라이브 폴더 ID
+const ADMIN_PASSWORD = 'admin1234';             // 인덱스 갱신을 위한 관리자 비밀번호 — 반드시 변경하세요
 ```
 
 ### 5단계 — Drive API v3 활성화

@@ -1,7 +1,8 @@
 // ── 상수 ────────────────────────────────────────────────────────────────────
-const FOLDER_ID           = 'your_root_folder_id';
-const INDEX_SHEET_ID      = 'your_spreadsheet_id';
-const ADMIN_PASSWORD      = 'admin1234';   // 실제 사용할 비밀번호로 변경하세요. 편의를 위해 평문으로 작성해도 됩니다.
+const INDEX_SHEET_ID      = 'your_spreadsheet_id';  // 스프레드시트 ID
+const FOLDER_ID           = 'your_root_folder_id';  // 구글 드라이브 폴더 ID
+const ADMIN_PASSWORD      = 'admin1234';   // 인덱스 갱신을 위한 관리자 비밀번호
+                                           // Code.gs는 배포 후에도 소스가 공개되지 않으므로 평문으로 작성
 
 const FILE_INDEX_SHEET    = 'FileIndex';   // 파일 메타데이터 인덱스 시트 이름
 const KEYWORD_LOG_SHEET   = 'KeywordLog';  // 키워드 빈도 로그 시트 이름
@@ -22,6 +23,28 @@ function rebuildMetadataIndex() {
   } finally {
     lock.releaseLock();
   }
+}
+
+// ── 트리거 설치 (수동 1회 실행) ──────────────────────────────────────────────
+function setupTriggers() {
+  // 기존 트리거 전체 삭제 (중복 방지)
+  ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
+
+  ScriptApp.newTrigger('rebuildMetadataIndex').timeBased().atHour(2).nearMinute(0).everyDays(1).create();
+  ScriptApp.newTrigger('warmCache').timeBased().atHour(2).nearMinute(30).everyDays(1).create();
+  ScriptApp.newTrigger('warmCache').timeBased().atHour(7).nearMinute(30).everyDays(1).create();
+  ScriptApp.newTrigger('warmCache').timeBased().atHour(12).nearMinute(30).everyDays(1).create();
+  ScriptApp.newTrigger('warmCache').timeBased().atHour(17).nearMinute(30).everyDays(1).create();
+  ScriptApp.newTrigger('purgeStaleKeywords').timeBased().atHour(3).nearMinute(0).everyDays(1).create();
+
+  Logger.log('트리거 6개 설치 완료');
+}
+
+
+// ── 진입점 ───────────────────────────────────────────────────────────────────
+function doGet(e) {
+  return HtmlService.createHtmlOutputFromFile('index')
+    .setTitle('대학진학자료 통합검색기');
 }
 
 function _rebuildMetadataIndexImpl() {
@@ -143,27 +166,6 @@ function _rebuildMetadataIndexImpl() {
 
   Logger.log('🎉 인덱싱 완료!');
   return 'done';
-}
-
-// ── 트리거 설치 (수동 1회 실행) ──────────────────────────────────────────────
-function setupTriggers() {
-  // 기존 트리거 전체 삭제 (중복 방지)
-  ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
-
-  ScriptApp.newTrigger('rebuildMetadataIndex').timeBased().atHour(2).nearMinute(0).everyDays(1).create();
-  ScriptApp.newTrigger('warmCache').timeBased().atHour(2).nearMinute(30).everyDays(1).create();
-  ScriptApp.newTrigger('warmCache').timeBased().atHour(7).nearMinute(30).everyDays(1).create();
-  ScriptApp.newTrigger('warmCache').timeBased().atHour(12).nearMinute(30).everyDays(1).create();
-  ScriptApp.newTrigger('warmCache').timeBased().atHour(17).nearMinute(30).everyDays(1).create();
-  ScriptApp.newTrigger('purgeStaleKeywords').timeBased().atHour(3).nearMinute(0).everyDays(1).create();
-
-  Logger.log('트리거 6개 설치 완료');
-}
-
-// ── 진입점 ───────────────────────────────────────────────────────────────────
-function doGet(e) {
-  return HtmlService.createHtmlOutputFromFile('index')
-    .setTitle('대학진학자료 통합검색기');
 }
 
 // ── 검색 메인 (google.script.run 호출점) ────────────────────────────────────
