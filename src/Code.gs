@@ -245,6 +245,14 @@ function _batchRemoveAll(cache, keys) {
   }
 }
 
+function _batchPutAll(cache, obj, ttl) {
+  const BATCH = 500;
+  const entries = Object.entries(obj);
+  for (let i = 0; i < entries.length; i += BATCH) {
+    cache.putAll(Object.fromEntries(entries.slice(i, i + BATCH)), ttl);
+  }
+}
+
 // ── 청크 캐시 헬퍼 (100KB 제한 우회) ────────────────────────────────────────
 function _putChunkedCache(cache, baseKey, data, ttl) {
   const json = JSON.stringify(data);
@@ -253,7 +261,7 @@ function _putChunkedCache(cache, baseKey, data, ttl) {
   for (let i = 0; i < count; i++) {
     obj[baseKey + '_' + i] = json.substring(i * CACHE_CHUNK_SIZE, (i + 1) * CACHE_CHUNK_SIZE);
   }
-  cache.putAll(obj, ttl);
+  _batchPutAll(cache, obj, ttl);
 }
 
 function _getChunkedCache(cache, baseKey) {
@@ -396,8 +404,8 @@ function getCachedMetadataMap() {
     cacheObj['meta_chunk_' + i] = jsonStr.substring(i * CACHE_CHUNK_SIZE, (i + 1) * CACHE_CHUNK_SIZE);
   }
 
-  // 쪼개진 데이터를 캐시에 한 번에 저장 (최적화)
-  cache.putAll(cacheObj, CACHE_TTL);
+  // 쪼개진 데이터를 캐시에 저장 (500개 배치)
+  _batchPutAll(cache, cacheObj, CACHE_TTL);
 
   return map;
 }
