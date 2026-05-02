@@ -2,23 +2,29 @@ name: gdrive-indexr
 
 services:
   backend:
-    build: .
+    build:
+      context: .
+      target: backend
     container_name: gdrive-indexr-backend
     env_file:
       - .env                     # FOLDER_ID, ADMIN_PASSWORD
     volumes:
-      - ./data:/app/data         # SQLite DB (database.sqlite) + 서비스 계정 키 (service-account.json)
+      - ./data/database.sqlite:/app/data/database.sqlite:rw
+      - ./data/service-account.json:/app/data/service-account.json:ro
     restart: always
 
   nginx:
-    image: nginx:latest
+    build:
+      context: .
+      target: frontend
     container_name: gdrive-indexr-nginx
+#    environment:
+#      - NGINX_DOMAIN=your-domain.com   # SSL 활성화 시 주석 해제
     ports:
       - "80:80"
-      # - "443:443"              # SSL 활성화 시 주석 해제
-    volumes:
-      - ./nginx.conf:/etc/nginx/templates/default.conf.template:ro
-      # - ./certs:/etc/nginx/certs:ro   # SSL 인증서 디렉토리 (Let's Encrypt 등)
+#      - "443:443"                      # SSL 활성화 시 주석 해제
+#    volumes:
+#      - ./certs:/etc/nginx/certs:ro    # SSL 인증서 디렉토리 (Let's Encrypt 등)
     depends_on:
       - backend
     restart: always
