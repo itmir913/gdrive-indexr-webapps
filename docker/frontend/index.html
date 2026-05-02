@@ -53,6 +53,23 @@
     #searchBtn:hover { background-color: var(--primary-hover); box-shadow: 0 6px 16px rgba(26, 115, 232, 0.3); }
     #searchBtn:disabled { background-color: #dadce0; cursor: not-allowed; transform: none; box-shadow: none; }
 
+    /* ── 백엔드 헬스 뱃지 ── */
+    #healthBadge {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 0.8rem; font-weight: 600; padding: 4px 10px;
+      border-radius: 20px; cursor: default; margin-top: 0.8rem;
+      transition: opacity 0.3s;
+    }
+    #healthBadge .dot {
+      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    }
+    #healthBadge.health-ok   { background: #e6f4ea; color: #1e8e3e; }
+    #healthBadge.health-ok .dot { background: #1e8e3e; }
+    #healthBadge.health-warn { background: #fef7e0; color: #f29900; }
+    #healthBadge.health-warn .dot { background: #f29900; }
+    #healthBadge.health-err  { background: #fce8e6; color: #d93025; }
+    #healthBadge.health-err .dot { background: #d93025; }
+
     /* ── 상태 표시 ── */
     #status { text-align: center; font-size: 0.95rem; color: var(--text-sub); min-height: 24px; margin-top: 2rem; }
     .spinner {
@@ -153,6 +170,7 @@
     .drive-link:hover { background-color: #e8eaed; text-decoration: none; }
 
     .error-msg { color: #d93025; }
+    .no-result { color: var(--text-sub); }
 
     /* ── 관리자 모달 스타일 ── */
     .admin-trigger {
@@ -248,6 +266,7 @@
       (※ 검색 속도 최적화를 위해 검색하신 키워드는 익명으로 저장됩니다.)
     </p>
     <p style="margin-top: 0.5rem; font-size: 0.85rem; color: #9aa0a6;">@ luminousky.com</p>
+    <div id="healthBadge" class="health-warn"><span class="dot"></span><span id="healthText">서버 연결 중...</span></div>
   </div>
 
   <div class="search-wrapper">
@@ -298,6 +317,7 @@
       <div class="status-row"><span>인증</span><span class="status-badge" id="statusAuth">조회 중...</span></div>
       <div class="status-row"><span>인덱스</span><span class="status-badge" id="statusIndex">조회 중...</span></div>
       <div class="status-row"><span>파일 수</span><span class="status-badge" id="statusCount">-</span></div>
+      <div class="status-row"><span>업타임</span><span class="status-badge" id="statusUptime">-</span></div>
     </div>
     <p style="font-size: 0.9rem; color: #5f6368; margin-bottom: 1rem;">
       인덱스를 즉시 갱신하려면 비밀번호를 입력하세요.
@@ -318,17 +338,35 @@
   const resultsDiv = document.getElementById('results');
   const guideBoxDiv = document.getElementById('guide-box');
 
-  // 인증 확인 (최초 + 5분마다 재확인)
-  function checkAuth() {
-    fetch('/api/auth/status')
+  // 헬스체크 (최초 + 30초마다)
+  function updateHealth() {
+    const badge = document.getElementById('healthBadge');
+    const text  = document.getElementById('healthText');
+    fetch('/api/health')
       .then(res => res.json())
-      .then(({ authenticated }) => {
-        if (!authenticated) window.location.href = '/api/auth/login';
+      .then(({ authenticated, isIndexing, indexedCount, uptime }) => {
+        if (!authenticated) {
+          window.location.href = '/api/auth/login';
+          return;
+        }
+        const h = Math.floor(uptime / 3600);
+        const m = Math.floor((uptime % 3600) / 60);
+        const uptimeStr = h > 0 ? `${h}h ${m}m` : `${m}m`;
+        if (isIndexing) {
+          badge.className = 'health-warn';
+          text.textContent = `인덱싱 중... (${indexedCount.toLocaleString()}개)`;
+        } else {
+          badge.className = 'health-ok';
+          text.textContent = `정상 · ${indexedCount.toLocaleString()}개 파일 · 업타임 ${uptimeStr}`;
+        }
       })
-      .catch(() => {});
+      .catch(() => {
+        badge.className = 'health-err';
+        text.textContent = '백엔드 연결 실패';
+      });
   }
-  checkAuth();
-  setInterval(checkAuth, 5 * 60 * 1000);
+  updateHealth();
+  setInterval(updateHealth, 30 * 1000);
 
   function escHtml(str) {
     if (!str) return '';
@@ -415,12 +453,13 @@
   }
 
   function loadServerStatus() {
-    fetch('/api/status')
+    fetch('/api/health')
       .then(res => res.json())
-      .then(({ authenticated, isIndexing, indexedCount }) => {
+      .then(({ authenticated, isIndexing, indexedCount, uptime }) => {
         const authEl  = document.getElementById('statusAuth');
         const indexEl = document.getElementById('statusIndex');
         const countEl = document.getElementById('statusCount');
+        const uptimeEl = document.getElementById('statusUptime');
 
         authEl.textContent  = authenticated ? '인증됨' : '미인증';
         authEl.className    = 'status-badge ' + (authenticated ? 'ok' : 'err');
@@ -430,9 +469,13 @@
 
         countEl.textContent = indexedCount.toLocaleString() + '개';
         countEl.className   = 'status-badge ok';
+
+        const h = Math.floor(uptime / 3600), m = Math.floor((uptime % 3600) / 60);
+        uptimeEl.textContent = h > 0 ? `${h}h ${m}m` : `${m}m`;
+        uptimeEl.className   = 'status-badge ok';
       })
       .catch(() => {
-        ['statusAuth', 'statusIndex', 'statusCount'].forEach(id => {
+        ['statusAuth', 'statusIndex', 'statusCount', 'statusUptime'].forEach(id => {
           const el = document.getElementById(id);
           el.textContent = '조회 실패';
           el.className = 'status-badge err';

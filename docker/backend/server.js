@@ -340,10 +340,6 @@ function sha256(str) {
 }
 
 // ── OAuth 라우트 ─────────────────────────────────────────────────────────────
-app.get('/api/auth/status', (req, res) => {
-    res.json({ authenticated: isAuthenticated() });
-});
-
 app.get('/api/auth/login', (req, res) => {
     const oAuth2Client = getOAuthClient();
     const authUrl = oAuth2Client.generateAuthUrl({
@@ -420,9 +416,15 @@ app.post('/api/rebuild', (req, res) => {
     rebuildMetadataIndex().catch(e => log.error('Index', e.message));
 });
 
-// ── 어드민: 상태 조회 ────────────────────────────────────────────────────────
-app.get('/api/status', (req, res) => {
-    res.json({ isIndexing, indexedCount: fileIndexCache.size, authenticated: isAuthenticated() });
+// ── 헬스체크 ─────────────────────────────────────────────────────────────────
+app.get('/api/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        uptime: Math.floor(process.uptime()),
+        authenticated: isAuthenticated(),
+        isIndexing,
+        indexedCount: fileIndexCache.size,
+    });
 });
 
 // ── 키워드 로그 ──────────────────────────────────────────────────────────────
