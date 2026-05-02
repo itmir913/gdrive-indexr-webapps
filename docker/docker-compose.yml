@@ -8,8 +8,6 @@ services:
     container_name: gdrive-indexr-backend
     env_file:
       - .env                     # FOLDER_ID, ADMIN_PASSWORD, OAUTH_REDIRECT_URI
-    environment:
-      - OAUTH_REDIRECT_URI=${OAUTH_REDIRECT_URI:-http://localhost/oauth/callback}
     volumes:
       - ./data:/app/data         # database.sqlite + credentials.json + token.json
     restart: always
