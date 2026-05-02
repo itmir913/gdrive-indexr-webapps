@@ -195,7 +195,10 @@ app.get('/api/search', (req, res) => {
         const tokens = tokenize(query);
         const tree = new BooleanParser(tokens).parse();
         const resultSet = evaluate(tree, fileIndexCache);
-        const results = Array.from(resultSet).map(id => fileIndexCache.get(id)).filter(Boolean);
+        const results = Array.from(resultSet)
+            .map(id => fileIndexCache.get(id))
+            .filter(Boolean)
+            .sort((a, b) => a.path.localeCompare(b.path, 'ko') || a.name.localeCompare(b.name, 'ko'));
 
         log.info('Search', `"${query}" → ${results.length}건`);
         logKeyword(query);
@@ -207,7 +210,7 @@ app.get('/api/search', (req, res) => {
 });
 
 // ── 어드민: 인덱스 재빌드 ────────────────────────────────────────────────────
-app.post('/api/admin/rebuild', (req, res) => {
+app.post('/api/rebuild', (req, res) => {
     const { passwordHash } = req.body || {};
     if (!passwordHash || passwordHash !== sha256(ADMIN_PASSWORD || '')) {
         log.warn('Admin', '인덱스 재빌드 요청 — 비밀번호 불일치');
@@ -225,7 +228,7 @@ app.post('/api/admin/rebuild', (req, res) => {
 });
 
 // ── 어드민: 인덱싱 상태 조회 ─────────────────────────────────────────────────
-app.get('/api/admin/status', (req, res) => {
+app.get('/api/status', (req, res) => {
     res.json({ isIndexing, indexedCount: fileIndexCache.size });
 });
 
