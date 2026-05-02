@@ -334,11 +334,12 @@
       const tags = (item.path || '').split('/').filter(s => s.length > 0);
       const tagHtml = tags.map(t => '<span class="tag">' + escHtml(t) + '</span>').join('');
 
+      const safeUrl = /^https?:\/\//i.test(item.url) ? item.url : '#';
       html += `
           <div class="result-item">
             <div class="result-name">${escHtml(item.name)}</div>
             ${tagHtml ? `<div class="tag-row">${tagHtml}</div>` : ''}
-            <a class="drive-link" href="${escHtml(item.url)}" target="_blank" rel="noopener">
+            <a class="drive-link" href="${escHtml(safeUrl)}" target="_blank" rel="noopener">
               드라이브에서 열기 ↗
             </a>
           </div>
