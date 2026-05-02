@@ -5,12 +5,10 @@ const express = require('express');
 const { google } = require('googleapis');
 const sqlite3 = require('sqlite3').verbose();
 const cron = require('node-cron');
-const cors = require('cors');
 const crypto = require('crypto');
 const { BooleanParser, tokenize, evaluate } = require('./parser');
 
 const app = express();
-app.use(cors());
 app.use(express.json());
 
 const PORT              = process.env.PORT || 3000;
@@ -48,14 +46,14 @@ function initDB() {
                     url        TEXT NOT NULL,
                     modifiedAt TEXT
                 )
-            `);
+            `, (err) => { if (err) return reject(err); });
             db.run(`
                 CREATE TABLE IF NOT EXISTS keyword_log (
                     keyword       TEXT PRIMARY KEY,
                     count         INTEGER DEFAULT 1,
                     lastSearchDay TEXT
                 )
-            `);
+            `, (err) => { if (err) return reject(err); });
             db.run(`
                 CREATE TABLE IF NOT EXISTS keyword_cache (
                     keyword  TEXT PRIMARY KEY,
@@ -147,6 +145,7 @@ function loadIndexToMemory() {
 
 // ── Drive 전체 텍스트 검색 ───────────────────────────────────────────────────
 async function driveFullTextSearch(keyword) {
+    if (!isAuthenticated()) return [];
     const drive = getDriveClient();
     const escaped = keyword.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     const q = `(name contains '${escaped}' or fullText contains '${escaped}') and trashed=false`;
@@ -465,7 +464,7 @@ function warmCache() {
                 [...extractKeywords(tree)].forEach(kw => getNameMatches(kw));
                 warmed++;
             }
-            log.info('WarmCache', `${warmed}개 키워드 완료`);
+            log.info('WarmCache', `로컬 인덱스 ${warmed}개 키워드 사전 로드 완료`);
         }
     );
 }

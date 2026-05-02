@@ -12,7 +12,6 @@
     "googleapis": "^126.0.0",
     "sqlite3": "^5.1.6",
     "node-cron": "^3.0.2",
-    "cors": "^2.8.5",
     "dotenv": "^16.3.1"
   },
   "devDependencies": {
