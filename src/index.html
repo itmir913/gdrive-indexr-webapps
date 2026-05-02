@@ -336,11 +336,13 @@
 
     if (!results || results.length === 0) {
       // 검색 결과가 없을 경우 메시지와 함께 가이드를 다시 보여줌
-      resultsDiv.innerHTML = '<div class="no-result">일치하는 검색 결과가 없습니다. 연산자를 활용해 보세요!</div>';
+      statusDiv.innerHTML = '<div class="no-result">검색 결과가 없습니다. 검색 조건을 다시 설정해주세요.</div>';
+      resultsDiv.innerHTML = '';
       guideBoxDiv.style.display = 'block';
       return;
     }
 
+    statusDiv.innerHTML = '';
     guideBoxDiv.style.display = 'none';
 
     let html = '';
@@ -364,9 +366,9 @@
 
   function handleError(error) {
     searchBtn.disabled = false;
-    statusDiv.innerHTML = '';
     guideBoxDiv.style.display = 'none';
-    resultsDiv.innerHTML = `<div class="error-msg">오류가 발생했습니다: ${escHtml(error.message || error)}</div>`;
+    statusDiv.innerHTML = `<div class="error-msg">오류가 발생했습니다: ${escHtml(error.message || error)}</div>`;
+    resultsDiv.innerHTML = '';
   }
 
   function openModal() {
