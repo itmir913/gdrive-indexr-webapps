@@ -283,13 +283,17 @@
   const resultsDiv = document.getElementById('results');
   const guideBoxDiv = document.getElementById('guide-box');
 
-  // 인증 확인
-  fetch('/api/auth/status')
-    .then(res => res.json())
-    .then(({ authenticated }) => {
-      if (!authenticated) window.location.href = '/api/auth/login';
-    })
-    .catch(() => {});
+  // 인증 확인 (최초 + 5분마다 재확인)
+  function checkAuth() {
+    fetch('/api/auth/status')
+      .then(res => res.json())
+      .then(({ authenticated }) => {
+        if (!authenticated) window.location.href = '/api/auth/login';
+      })
+      .catch(() => {});
+  }
+  checkAuth();
+  setInterval(checkAuth, 5 * 60 * 1000);
 
   function escHtml(str) {
     if (!str) return '';

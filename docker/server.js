@@ -73,7 +73,24 @@ function initDB() {
 
 // ── OAuth 인증 ───────────────────────────────────────────────────────────────
 function isAuthenticated() {
-    return fs.existsSync(TOKEN_PATH);
+    if (!fs.existsSync(TOKEN_PATH)) return false;
+    try {
+        const token = JSON.parse(fs.readFileSync(TOKEN_PATH));
+        // refresh_token이 있으면 만료돼도 자동 갱신 가능
+        if (token.refresh_token) return true;
+        // refresh_token 없으면 expiry_date로 판단
+        if (token.expiry_date && token.expiry_date < Date.now()) return false;
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function clearToken() {
+    if (fs.existsSync(TOKEN_PATH)) {
+        fs.unlinkSync(TOKEN_PATH);
+        log.warn('Auth', 'token.json 삭제 — 재인증 필요');
+    }
 }
 
 function getOAuthClient() {
@@ -102,6 +119,11 @@ async function withRetry(fn, retries = RETRY_COUNT, delay = RETRY_DELAY_MS) {
         try {
             return await fn();
         } catch (e) {
+            const status = e.status || e.code || e.response?.status;
+            if (status === 401 || status === 403) {
+                clearToken();
+                throw e; // 재시도 없이 즉시 throw
+            }
             if (i === retries - 1) throw e;
             await new Promise(r => setTimeout(r, delay * Math.pow(2, i)));
         }
