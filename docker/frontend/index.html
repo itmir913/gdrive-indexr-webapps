@@ -49,6 +49,7 @@
       font-family: inherit; font-size: 1rem; font-weight: 600; color: white;
       background-color: var(--primary-color); border: none; border-radius: 50px;
       padding: 0 1.5rem; cursor: pointer; box-shadow: 0 4px 12px rgba(26, 115, 232, 0.2); transition: all 0.2s ease;
+      display: flex; align-items: center; justify-content: center;
     }
     #searchBtn:hover { background-color: var(--primary-hover); box-shadow: 0 6px 16px rgba(26, 115, 232, 0.3); }
     #searchBtn:disabled { background-color: #dadce0; cursor: not-allowed; transform: none; box-shadow: none; }
@@ -277,7 +278,11 @@
   <div class="search-wrapper">
     <input type="text" id="searchInput" placeholder="검색어를 입력하세요 (예: 한국대 and 수시)"
            onkeydown="if(event.key === 'Enter') doSearchUI()">
-    <button id="searchBtn" onclick="doSearchUI()">검색</button>
+    <button id="searchBtn" onclick="doSearchUI()">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="22" y2="22"/>
+      </svg>
+    </button>
   </div>
 
   <div id="status"></div>
