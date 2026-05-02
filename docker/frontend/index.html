@@ -314,10 +314,10 @@
     <h2>관리자 인증</h2>
     <div class="server-status" id="serverStatus">
       <div class="status-title">서버 상태</div>
-      <div class="status-row"><span>인증</span><span class="status-badge" id="statusAuth">조회 중...</span></div>
-      <div class="status-row"><span>인덱스</span><span class="status-badge" id="statusIndex">조회 중...</span></div>
-      <div class="status-row"><span>파일 수</span><span class="status-badge" id="statusCount">-</span></div>
-      <div class="status-row"><span>업타임</span><span class="status-badge" id="statusUptime">-</span></div>
+      <div class="status-row"><span>구글 OAuth 인증</span><span class="status-badge" id="statusAuth">조회 중...</span></div>
+      <div class="status-row"><span>드라이브 인덱싱</span><span class="status-badge" id="statusIndex">조회 중...</span></div>
+      <div class="status-row"><span>인덱싱된 파일 수</span><span class="status-badge" id="statusCount">-</span></div>
+      <div class="status-row"><span>서버 업타임</span><span class="status-badge" id="statusUptime">-</span></div>
     </div>
     <p style="font-size: 0.9rem; color: #5f6368; margin-bottom: 1rem;">
       인덱스를 즉시 갱신하려면 비밀번호를 입력하세요.
@@ -357,12 +357,12 @@
           text.textContent = `인덱싱 중... (${indexedCount.toLocaleString()}개)`;
         } else {
           badge.className = 'health-ok';
-          text.textContent = `정상 · ${indexedCount.toLocaleString()}개 파일 · 업타임 ${uptimeStr}`;
+          text.textContent = `정상 · ${indexedCount.toLocaleString()}개 파일`;
         }
       })
       .catch(() => {
         badge.className = 'health-err';
-        text.textContent = '백엔드 연결 실패';
+        text.textContent = '구글 드라이브 연결 실패';
       });
   }
   updateHealth();
