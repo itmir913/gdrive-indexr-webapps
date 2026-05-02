@@ -529,17 +529,46 @@ function _computeSHA256(str) {
 // ── Boolean 쿼리 파서 ────────────────────────────────────────────────────────
 
 function tokenize(query) {
-  // 괄호 앞뒤에 공백 삽입 후 분리
-  const raw = query.replace(/\(/g, ' ( ').replace(/\)/g, ' ) ').trim().split(/\s+/);
-  return raw.filter(s => s.length > 0).map(s => {
-    const upper = s.toUpperCase();
-    if (upper === 'AND')  return { type: 'AND',    value: 'AND' };
-    if (upper === 'OR')   return { type: 'OR',     value: 'OR' };
-    if (upper === 'NOT')  return { type: 'NOT',    value: 'NOT' };
-    if (upper === '(')    return { type: 'LPAREN', value: '(' };
-    if (upper === ')')    return { type: 'RPAREN', value: ')' };
-    return { type: 'KEYWORD', value: s.toLowerCase() };
-  });
+  const tokens = [];
+  let i = 0;
+  const s = query.trim();
+  const n = s.length;
+
+  while (i < n) {
+    while (i < n && s[i] === ' ') i++;
+    if (i >= n) break;
+
+    if (s[i] === '(') { tokens.push({ type: 'LPAREN', value: '(' }); i++; continue; }
+    if (s[i] === ')') { tokens.push({ type: 'RPAREN', value: ')' }); i++; continue; }
+
+    // 첫 단어 읽기
+    const start = i;
+    while (i < n && s[i] !== ' ' && s[i] !== '(' && s[i] !== ')') i++;
+    const word = s.slice(start, i);
+    const upper = word.toUpperCase();
+
+    if (upper === 'AND') { tokens.push({ type: 'AND', value: 'AND' }); continue; }
+    if (upper === 'OR')  { tokens.push({ type: 'OR',  value: 'OR'  }); continue; }
+    if (upper === 'NOT') { tokens.push({ type: 'NOT', value: 'NOT' }); continue; }
+
+    // 키워드: 다음 단어가 AND/OR/NOT/괄호가 아닌 한 공백째 이어붙임
+    let kw = word;
+    while (i < n) {
+      let j = i;
+      while (j < n && s[j] === ' ') j++;
+      if (j >= n || s[j] === '(' || s[j] === ')') break;
+      let k = j;
+      while (k < n && s[k] !== ' ' && s[k] !== '(' && s[k] !== ')') k++;
+      const next = s.slice(j, k).toUpperCase();
+      if (next === 'AND' || next === 'OR' || next === 'NOT') break;
+      kw += s.slice(i, k); // 공백 + 다음 단어 포함
+      i = k;
+    }
+
+    tokens.push({ type: 'KEYWORD', value: kw.toLowerCase().replace(/\s+/g, ' ') });
+  }
+
+  return tokens;
 }
 
 function buildExpressionTree(tokens) {
@@ -560,8 +589,8 @@ function buildExpressionTree(tokens) {
 
   function parseTerm() {
     let left = parseFactor();
-    while (peek() && peek().type !== 'OR' && peek().type !== 'RPAREN') {
-      if (peek().type === 'AND') consume(); // 명시적 AND 소비
+    while (peek() && peek().type === 'AND') {
+      consume();
       if (!peek() || peek().type === 'OR' || peek().type === 'RPAREN') break;
       const right = parseFactor();
       left = { type: 'AND', left, right };
