@@ -296,6 +296,14 @@
     // 연산자 단독 입력 차단 (예: "NOT" → backend NOT(EMPTY) → 전체 파일 반환 방지)
     if (/^(AND|OR|NOT)$/i.test(query)) return;
 
+    // AND/OR/NOT·괄호를 경계로 키워드 토큰을 분리하여 각각 2글자 이상 검증
+    const keywords = query.split(/\b(?:AND|OR|NOT)\b|[()]/i)
+      .map(k => k.trim()).filter(k => k.length > 0);
+    if (keywords.length === 0 || keywords.some(k => k.length < 2)) {
+      alert('검색어는 두 글자 이상 입력해 주세요.');
+      return;
+    }
+
     // 정제된 검색어를 검색창에도 다시 반영하여 깔끔하게 보여줌
     searchInput.value = query;
 
