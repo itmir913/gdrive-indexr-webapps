@@ -64,47 +64,33 @@ BooleanParser.prototype.parsePrimary = function() {
 };
 
 /**
- * AST를 순회하며 검색 결과(File ID의 Set)를 반환
- * @param {Object} node - AST 노드
- * @param {Map} fileMap - 메모리에 로드된 전체 파일 인덱스
+ * AST를 순회하며 검색 결과(fileId의 Set)를 반환
+ * @param {Object} node       - AST 노드
+ * @param {Map}    keywordMap - keyword → Set<fileId> (서버에서 사전 조회)
+ * @param {Set}    allIds     - 전체 fileId Set (NOT 연산용)
  */
-function evaluate(node, fileMap) {
-    if (node.type === 'EMPTY') return new Set();
+function evaluate(node, keywordMap, allIds) {
+    if (!node || node.type === 'EMPTY') return new Set();
 
     if (node.type === 'KEYWORD') {
-        const results = new Set();
-        const searchWord = node.value.toLowerCase();
-
-        // 메모리에 로드된 전체 파일 맵에서 키워드 포함 여부 검사
-        for (const [id, file] of fileMap) {
-            if (file.name.toLowerCase().includes(searchWord) ||
-                file.path.toLowerCase().includes(searchWord)) {
-                results.add(id);
-            }
-        }
-        return results;
+        return new Set(keywordMap.get(node.value) || []);
     }
 
     if (node.type === 'OR') {
-        const left = evaluate(node.left, fileMap);
-        const right = evaluate(node.right, fileMap);
-        // Union (합집합)
+        const left  = evaluate(node.left,  keywordMap, allIds);
+        const right = evaluate(node.right, keywordMap, allIds);
         return new Set([...left, ...right]);
     }
 
     if (node.type === 'AND') {
-        const left = evaluate(node.left, fileMap);
-        // 단축 평가: 왼쪽이 비었으면 오른쪽 계산 안 함
+        const left = evaluate(node.left, keywordMap, allIds);
         if (left.size === 0) return new Set();
-        const right = evaluate(node.right, fileMap);
-        // Intersection (교집합)
+        const right = evaluate(node.right, keywordMap, allIds);
         return new Set([...left].filter(x => right.has(x)));
     }
 
     if (node.type === 'NOT') {
-        const operand = evaluate(node.operand, fileMap);
-        // 전체 집합에서 operand 결과 제외
-        const allIds = new Set(fileMap.keys());
+        const operand = evaluate(node.operand, keywordMap, allIds);
         return new Set([...allIds].filter(x => !operand.has(x)));
     }
 

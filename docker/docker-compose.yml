@@ -9,8 +9,7 @@ services:
     env_file:
       - .env                     # FOLDER_ID, ADMIN_PASSWORD
     volumes:
-      - ./data/database.sqlite:/app/data/database.sqlite:rw
-      - ./data/service-account.json:/app/data/service-account.json:ro
+      - ./data:/app/data         # database.sqlite + service-account.json
     restart: always
 
   nginx:

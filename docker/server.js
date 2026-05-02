@@ -12,11 +12,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
-const FOLDER_ID = process.env.FOLDER_ID;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+const PORT                   = process.env.PORT || 3000;
+const FOLDER_ID              = process.env.FOLDER_ID;
+const ADMIN_PASSWORD         = process.env.ADMIN_PASSWORD;
 const SERVICE_ACCOUNT_KEY_PATH = process.env.SERVICE_ACCOUNT_KEY_PATH || '/app/data/service-account.json';
-const PRECACHE_TOP_N = 100;
+const PRECACHE_TOP_N         = 100;
+const CACHE_TTL_MS           = 6 * 60 * 60 * 1000; // 6시간
+const RETRY_COUNT            = 3;
+const RETRY_DELAY_MS         = 500;
 
 const db = new sqlite3.Database('/app/data/database.sqlite');
 let fileIndexCache = new Map();
@@ -48,6 +51,13 @@ function initDB() {
                     count         INTEGER DEFAULT 1,
                     lastSearchDay TEXT
                 )
+            `);
+            db.run(`
+                CREATE TABLE IF NOT EXISTS keyword_cache (
+                    keyword  TEXT PRIMARY KEY,
+                    fileIds  TEXT NOT NULL,
+                    cachedAt INTEGER NOT NULL
+                )
             `, (err) => {
                 if (err) return reject(err);
                 log.info('DB', '스키마 초기화 완료');
@@ -66,6 +76,18 @@ function getDriveClient() {
     return google.drive({ version: 'v3', auth });
 }
 
+// ── 재시도 헬퍼 (지수 백오프) ─────────────────────────────────────────────────
+async function withRetry(fn, retries = RETRY_COUNT, delay = RETRY_DELAY_MS) {
+    for (let i = 0; i < retries; i++) {
+        try {
+            return await fn();
+        } catch (e) {
+            if (i === retries - 1) throw e;
+            await new Promise(r => setTimeout(r, delay * Math.pow(2, i)));
+        }
+    }
+}
+
 // ── 메모리 캐시 로드 ─────────────────────────────────────────────────────────
 function loadIndexToMemory() {
     return new Promise((resolve, reject) => {
@@ -79,6 +101,94 @@ function loadIndexToMemory() {
             resolve();
         });
     });
+}
+
+// ── Drive 전체 텍스트 검색 ───────────────────────────────────────────────────
+async function driveFullTextSearch(keyword) {
+    const drive = getDriveClient();
+    const escaped = keyword.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const q = `(name contains '${escaped}' or fullText contains '${escaped}') and trashed=false`;
+    const ids = [];
+    let pageToken = null;
+
+    do {
+        const params = {
+            q,
+            fields: 'nextPageToken, files(id)',
+            pageSize: 1000,
+            supportsAllDrives: true,
+            includeItemsFromAllDrives: true,
+        };
+        if (pageToken) params.pageToken = pageToken;
+
+        const response = await withRetry(() => drive.files.list(params));
+        (response.data.files || []).forEach(f => ids.push(f.id));
+        pageToken = response.data.nextPageToken || null;
+    } while (pageToken);
+
+    return ids;
+}
+
+// ── 로컬 인덱스에서 파일명/경로 검색 ──────────────────────────────────────────
+function getNameMatches(keyword) {
+    const results = [];
+    for (const [id, file] of fileIndexCache) {
+        if (file.name.toLowerCase().includes(keyword) ||
+            file.path.toLowerCase().includes(keyword)) {
+            results.push(id);
+        }
+    }
+    return results;
+}
+
+// ── 키워드 캐시 조회 ─────────────────────────────────────────────────────────
+function getCachedFileIds(keyword) {
+    return new Promise((resolve) => {
+        db.get(
+            'SELECT fileIds, cachedAt FROM keyword_cache WHERE keyword = ?',
+            [keyword],
+            (err, row) => {
+                if (err || !row) return resolve(null);
+                if (Date.now() - row.cachedAt > CACHE_TTL_MS) return resolve(null);
+                try { resolve(JSON.parse(row.fileIds)); }
+                catch { resolve(null); }
+            }
+        );
+    });
+}
+
+// ── 키워드 캐시 저장 ─────────────────────────────────────────────────────────
+function setCachedFileIds(keyword, fileIds) {
+    db.run(
+        'INSERT OR REPLACE INTO keyword_cache (keyword, fileIds, cachedAt) VALUES (?, ?, ?)',
+        [keyword, JSON.stringify(fileIds), Date.now()]
+    );
+}
+
+// ── 키워드 → fileId 배열 (캐시 → Drive 검색 → 로컬 인덱스 합산) ──────────────
+async function getFileIdsForKeyword(keyword) {
+    const cached = await getCachedFileIds(keyword);
+    if (cached !== null) return cached;
+
+    const [driveIds, nameIds] = await Promise.all([
+        withRetry(() => driveFullTextSearch(keyword)).catch(e => {
+            log.error('Drive', `전체 텍스트 검색 실패 [${keyword}]: ${e.message}`);
+            return [];
+        }),
+        Promise.resolve(getNameMatches(keyword)),
+    ]);
+
+    const combined = [...new Set([...driveIds, ...nameIds])];
+    setCachedFileIds(keyword, combined);
+    return combined;
+}
+
+// ── AST에서 키워드 추출 ──────────────────────────────────────────────────────
+function extractKeywords(node) {
+    if (!node || node.type === 'EMPTY') return new Set();
+    if (node.type === 'KEYWORD') return new Set([node.value]);
+    if (node.type === 'NOT') return extractKeywords(node.operand);
+    return new Set([...extractKeywords(node.left), ...extractKeywords(node.right)]);
 }
 
 // ── 인덱스 재빌드 (Google Drive API BFS 탐색) ────────────────────────────────
@@ -105,11 +215,11 @@ async function rebuildMetadataIndex() {
 
             let folderName = '';
             try {
-                const meta = await drive.files.get({
+                const meta = await withRetry(() => drive.files.get({
                     fileId: current.id,
                     fields: 'name',
                     supportsAllDrives: true,
-                });
+                }));
                 folderName = meta.data.name || '';
             } catch (e) {
                 log.error('Index', `폴더 이름 조회 실패 [${current.id}]: ${e.message}`);
@@ -132,7 +242,7 @@ async function rebuildMetadataIndex() {
 
                 let response;
                 try {
-                    response = await drive.files.list(params);
+                    response = await withRetry(() => drive.files.list(params));
                 } catch (e) {
                     log.error('Index', `파일 목록 조회 실패 [${current.id}]: ${e.message}`);
                     break;
@@ -143,11 +253,8 @@ async function rebuildMetadataIndex() {
                         folderQueue.push({ id: file.id, path: currentPath });
                     } else {
                         fileRows.push([
-                            file.id,
-                            file.name,
-                            currentPath,
-                            file.webViewLink || '',
-                            file.modifiedTime || '',
+                            file.id, file.name, currentPath,
+                            file.webViewLink || '', file.modifiedTime || '',
                         ]);
                     }
                 }
@@ -159,6 +266,7 @@ async function rebuildMetadataIndex() {
         await new Promise((resolve, reject) => {
             db.serialize(() => {
                 db.run('DELETE FROM file_index');
+                db.run('DELETE FROM keyword_cache'); // 인덱스 갱신 시 키워드 캐시 무효화
                 const stmt = db.prepare(
                     'INSERT OR REPLACE INTO file_index (fileId, name, path, url, modifiedAt) VALUES (?, ?, ?, ?, ?)'
                 );
@@ -187,14 +295,29 @@ function sha256(str) {
 }
 
 // ── 검색 API ─────────────────────────────────────────────────────────────────
-app.get('/api/search', (req, res) => {
+app.get('/api/search', async (req, res) => {
     const query = (req.query.q || '').trim();
     if (!query) return res.json([]);
 
     try {
         const tokens = tokenize(query);
         const tree = new BooleanParser(tokens).parse();
-        const resultSet = evaluate(tree, fileIndexCache);
+
+        // 1. AST에서 키워드 추출
+        const keywords = [...extractKeywords(tree)];
+
+        // 2. 키워드별 fileId 병렬 조회 (캐시 → Drive + 로컬 인덱스)
+        const fileIdArrays = await Promise.all(keywords.map(kw => getFileIdsForKeyword(kw)));
+
+        // 3. keyword → Set 맵 구성
+        const keywordMap = new Map();
+        keywords.forEach((kw, i) => keywordMap.set(kw, new Set(fileIdArrays[i])));
+
+        // 4. AST 평가
+        const allIds = new Set(fileIndexCache.keys());
+        const resultSet = evaluate(tree, keywordMap, allIds);
+
+        // 5. 메타데이터 조회 및 정렬
         const results = Array.from(resultSet)
             .map(id => fileIndexCache.get(id))
             .filter(Boolean)
@@ -270,7 +393,8 @@ function warmCache() {
             for (const { keyword } of rows) {
                 const tokens = tokenize(keyword);
                 const tree = new BooleanParser(tokens).parse();
-                evaluate(tree, fileIndexCache);
+                const keywords = [...extractKeywords(tree)];
+                keywords.forEach(kw => getNameMatches(kw));
                 warmed++;
             }
             log.info('WarmCache', `${warmed}개 키워드 완료`);
