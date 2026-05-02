@@ -25,5 +25,6 @@ services:
 #    volumes:
 #      - ./certs:/etc/nginx/certs:ro    # SSL 인증서 디렉토리 (Let's Encrypt 등)
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: always
