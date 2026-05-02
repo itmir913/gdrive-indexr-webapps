@@ -120,7 +120,20 @@
     }
 
     /* ── 검색 결과 카드 ── */
-    #results { display: flex; flex-direction: column; gap: 16px; }
+    /* 기본 상태: 모바일 등 1024px 미만일 때 (1열 배치) */
+    #results {
+      display: grid;
+      grid-template-columns: 1fr; /* 1열 */
+      gap: 16px;
+    }
+
+    /* 1024px 이상 화면: PC, 태블릿 (2열 배치) */
+    @media (min-width: 1024px) {
+      #results {
+        grid-template-columns: repeat(2, 1fr); /* 2열 (1fr 1fr과 동일) */
+      }
+    }
+
     .result-item {
       background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 16px;
       padding: 1.5rem; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02); transition: transform 0.2s ease, box-shadow 0.2s ease;
@@ -217,36 +230,35 @@
   </div>
 
   <div id="status"></div>
-  <div id="results">
-    <div class="guide-box">
-      <div class="guide-title">💡 검색 조건을 설정하여 원하는 자료를 더 정확하게 검색하는 방법</div>
-      <ul class="guide-list">
-        <li>
-          <span class="code-tag">2027 AND 입시 자료 AND 종합</span>
-          <span class="guide-desc"><b>(AND)</b> <b>모든 단어가 포함</b>된 문서만 찾습니다.<br>
+  <div id="guide-box" class="guide-box">
+    <div class="guide-title">💡 검색 조건을 설정하여 원하는 자료를 더 정확하게 검색하는 방법</div>
+    <ul class="guide-list">
+      <li>
+        <span class="code-tag">2027 AND 입시 자료 AND 종합</span>
+        <span class="guide-desc"><b>(AND)</b> <b>모든 단어가 포함</b>된 문서만 찾습니다.<br>
             (예: '2027', '입시 자료', '종합'이 모두 포함된 문서만 검색)</span>
-        </li>
-        <li>
-          <span class="code-tag">논술 OR 면접</span>
-          <span class="guide-desc"><b>(OR)</b> 두 키워드 중에서 <b>하나라도 포함</b>된 문서를 찾습니다.<br>
+      </li>
+      <li>
+        <span class="code-tag">논술 OR 면접</span>
+        <span class="guide-desc"><b>(OR)</b> 두 키워드 중에서 <b>하나라도 포함</b>된 문서를 찾습니다.<br>
             (예: '논술'이 포함되어 있거나, '면접'이 포함된 문서 검색)</span>
-        </li>
-        <li>
-          <span class="code-tag">학생부 NOT 교과</span>
-          <span class="guide-desc"><b>(NOT)</b> 앞의 단어는 포함하되, <b>NOT 뒤의 단어가 포함된 문서는 결과에서 제외</b>합니다.<br>
+      </li>
+      <li>
+        <span class="code-tag">학생부 NOT 교과</span>
+        <span class="guide-desc"><b>(NOT)</b> 앞의 단어는 포함하되, <b>NOT 뒤의 단어가 포함된 문서는 결과에서 제외</b>합니다.<br>
             (예: '학생부'를 포함하고, '교과'가 포함되지 않은 문서 검색</span>
-        </li>
-        <li>
-          <span class="code-tag">(자연계열 OR 공학계열) AND 면접</span>
-          <span class="guide-desc"><b>(괄호)</b> 복잡한 조건도 우선순위를 정해 검색할 수 있습니다.<br>
+      </li>
+      <li>
+        <span class="code-tag">(자연계열 OR 공학계열) AND 면접</span>
+        <span class="guide-desc"><b>(괄호)</b> 복잡한 조건도 우선순위를 정해 검색할 수 있습니다.<br>
             (예: '자연계열'이나 '공학계열'를 포함하고, '면접'도 포함된 문서 검색)</span>
-        </li>
-      </ul>
-      <div class="notice-box">
-        ⚠️ 현재 검색 조건 기능은 베타 버전으로, 원하시는 결과가 정확하게 나오지 않을 수 있습니다.
-      </div>
+      </li>
+    </ul>
+    <div class="notice-box">
+      ⚠️ 현재 검색 조건 기능은 베타 버전으로, 원하시는 결과가 정확하게 나오지 않을 수 있습니다.
     </div>
   </div>
+  <div id="results"></div>
 </div>
 
 <div class="admin-trigger" onclick="openModal()" title="관리자 설정">⚙️</div>
@@ -271,9 +283,7 @@
   const searchBtn = document.getElementById('searchBtn');
   const statusDiv = document.getElementById('status');
   const resultsDiv = document.getElementById('results');
-
-  // 검색 가이드 원본 HTML 저장 (결과가 없을 때 다시 보여주기 위함)
-  const initialGuideHTML = resultsDiv.innerHTML;
+  const guideBoxDiv = document.getElementById('guide-box');
 
   function escHtml(str) {
     if (!str) return '';
@@ -312,6 +322,7 @@
     searchBtn.disabled = true;
     statusDiv.innerHTML = '<div class="spinner"></div><span>자료를 찾고 있습니다...</span>';
     resultsDiv.innerHTML = '';
+    guideBoxDiv.style.display = 'none';
 
     google.script.run
             .withSuccessHandler(displayResults)
@@ -325,9 +336,12 @@
 
     if (!results || results.length === 0) {
       // 검색 결과가 없을 경우 메시지와 함께 가이드를 다시 보여줌
-      resultsDiv.innerHTML = '<div class="no-result">일치하는 검색 결과가 없습니다. 연산자를 활용해 보세요!</div>' + initialGuideHTML;
+      resultsDiv.innerHTML = '<div class="no-result">일치하는 검색 결과가 없습니다. 연산자를 활용해 보세요!</div>';
+      guideBoxDiv.style.display = 'block';
       return;
     }
+
+    guideBoxDiv.style.display = 'none';
 
     let html = '';
     results.forEach(function(item) {
@@ -351,6 +365,7 @@
   function handleError(error) {
     searchBtn.disabled = false;
     statusDiv.innerHTML = '';
+    guideBoxDiv.style.display = 'none';
     resultsDiv.innerHTML = `<div class="error-msg">오류가 발생했습니다: ${escHtml(error.message || error)}</div>`;
   }
 
