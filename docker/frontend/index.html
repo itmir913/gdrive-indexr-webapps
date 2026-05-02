@@ -219,6 +219,8 @@
       padding: 0.6rem 1.2rem; border-radius: 8px; cursor: pointer; border: none; font-weight: 600;
     }
     .btn-cancel { background: #e8eaed; }
+    .btn-oauth  { background: #34a853; color: white; }
+    .btn-oauth:disabled { background: #dadce0; color: #9aa0a6; cursor: not-allowed; }
     .btn-confirm { background: var(--primary-color); color: white; }
     .btn-confirm:disabled {
       background-color: #dadce0;
@@ -320,12 +322,13 @@
       <div class="status-row"><span>서버 업타임</span><span class="status-badge" id="statusUptime">-</span></div>
     </div>
     <p style="font-size: 0.9rem; color: #5f6368; margin-bottom: 1rem;">
-      인덱스를 즉시 갱신하려면 비밀번호를 입력하세요.
+      비밀번호를 입력하면 Google 로그인 또는 인덱스 갱신을 실행할 수 있습니다.
     </p>
     <input type="password" id="adminPw" placeholder="비밀번호 입력"
            onkeydown="if(event.key === 'Enter') requestRebuild()">
     <div class="modal-btns">
       <button class="btn-cancel" onclick="closeModal()">취소</button>
+      <button class="btn-oauth" id="oauthLoginBtn" onclick="requestOAuthLogin()">Google 로그인</button>
       <button class="btn-confirm" id="confirmBtn" onclick="requestRebuild()">갱신 시작</button>
     </div>
   </div>
@@ -346,7 +349,8 @@
       .then(res => res.json())
       .then(({ authenticated, isIndexing, indexedCount, uptime }) => {
         if (!authenticated) {
-          window.location.href = '/api/auth/login';
+          badge.className = 'health-err';
+          text.textContent = '미인증 — 관리자 설정에서 Google 로그인 필요';
           return;
         }
         const h = Math.floor(uptime / 3600);
@@ -496,6 +500,35 @@
     const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function requestOAuthLogin() {
+    const pw = document.getElementById('adminPw').value;
+    if (!pw) return alert('비밀번호를 입력하세요.');
+
+    const btn = document.getElementById('oauthLoginBtn');
+    btn.disabled = true;
+    btn.innerText = '연결 중...';
+
+    try {
+      const hashedPw = await hashPassword(pw);
+      const res = await fetch('/api/auth/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passwordHash: hashedPw }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        window.location.href = data.url;
+      } else {
+        alert(data.error || '비밀번호가 올바르지 않습니다.');
+      }
+    } catch {
+      alert('요청 중 오류가 발생했습니다.');
+    } finally {
+      btn.disabled = false;
+      btn.innerText = 'Google 로그인';
+    }
   }
 
   async function requestRebuild() {

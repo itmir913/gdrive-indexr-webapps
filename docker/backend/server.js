@@ -354,7 +354,12 @@ function sha256(str) {
 }
 
 // ── OAuth 라우트 ─────────────────────────────────────────────────────────────
-app.get('/api/auth/login', (req, res) => {
+app.post('/api/auth/initiate', (req, res) => {
+    const { passwordHash } = req.body || {};
+    if (!passwordHash || passwordHash !== sha256(ADMIN_PASSWORD || '')) {
+        log.warn('Admin', 'OAuth 시작 요청 — 비밀번호 불일치');
+        return res.status(401).json({ error: '비밀번호가 올바르지 않습니다.' });
+    }
     try {
         const oAuth2Client = getOAuthClient();
         const authUrl = oAuth2Client.generateAuthUrl({
@@ -362,10 +367,11 @@ app.get('/api/auth/login', (req, res) => {
             scope: ['https://www.googleapis.com/auth/drive.readonly'],
             prompt: 'consent',
         });
-        res.redirect(authUrl);
+        log.info('Admin', 'OAuth 시작 허가, URL 발급');
+        res.status(200).json({ url: authUrl });
     } catch (e) {
         log.error('Auth', `credentials.json 로드 실패: ${e.message}`);
-        res.status(500).send('서버 설정 오류: credentials.json을 확인하세요.');
+        res.status(500).json({ error: '서버 설정 오류: credentials.json을 확인하세요.' });
     }
 });
 
@@ -511,7 +517,7 @@ initDB()
         app.listen(PORT, () => {
             log.info('Server', `포트 ${PORT}에서 가동 중`);
             if (!isAuthenticated()) {
-                log.warn('Auth', '미인증 상태 — http://your-domain/api/auth/login 접속하여 인증하세요');
+                log.warn('Auth', '미인증 상태 — 프론트엔드 관리자 모달에서 Google 로그인 필요');
             }
         });
     })
