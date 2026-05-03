@@ -143,15 +143,17 @@
     }
 
     /* ── 검색 결과 카드 ── */
+    /* 기본 상태: 모바일 등 1024px 미만일 때 (1열 배치) */
     #results {
       display: grid;
-      grid-template-columns: 1fr;
+      grid-template-columns: 1fr; /* 1열 */
       gap: 16px;
     }
 
+    /* 1024px 이상 화면: PC, 태블릿 (2열 배치) */
     @media (min-width: 1024px) {
       #results {
-        grid-template-columns: repeat(2, 1fr);
+        grid-template-columns: repeat(2, 1fr); /* 2열 (1fr 1fr과 동일) */
       }
     }
 
@@ -173,8 +175,8 @@
     }
     .drive-link:hover { background-color: #e8eaed; text-decoration: none; }
 
+    /* 기타 안내 */
     .error-msg { color: #d93025; }
-    .no-result { color: var(--text-sub); }
 
     /* ── 관리자 모달 스타일 ── */
     .admin-trigger {
@@ -388,16 +390,20 @@
   function doSearchUI() {
     if (searchBtn.disabled) return;
 
+    // 정규식을 사용해 2개 이상의 연속된 공백을 1개의 공백으로 압축한 뒤 양끝 공백 제거
     let query = searchInput.value.replace(/\s+/g, ' ').trim();
 
+    // 끝에 매달린 무의미한 연산자를 모두 제거 (대소문자 무시, 연속 연산자 반복 처리)
     let prev;
     do {
       prev = query;
       query = query.replace(/\s+(AND|OR|NOT)$/i, '').trim();
     } while (query !== prev);
 
+    // 연산자 단독 입력 차단 (예: "NOT" → backend NOT(EMPTY) → 전체 파일 반환 방지)
     if (/^(AND|OR|NOT)$/i.test(query)) return;
 
+    // AND/OR/NOT·괄호를 경계로 키워드 토큰을 분리하여 각각 2글자 이상 검증
     const keywords = query.split(/\b(?:AND|OR|NOT)\b|[()]/i)
       .map(k => k.trim()).filter(k => k.length > 0);
     if (keywords.length === 0 || keywords.some(k => k.length < 2)) {
@@ -405,7 +411,9 @@
       return;
     }
 
+    // 정제된 검색어를 검색창에도 다시 반영하여 깔끔하게 보여줌
     searchInput.value = query;
+
     if (!query) return;
 
     searchBtn.disabled = true;
@@ -424,12 +432,14 @@
     statusDiv.innerHTML = '';
 
     if (!results || results.length === 0) {
+      // 검색 결과가 없을 경우 메시지와 함께 가이드를 다시 보여줌
       statusDiv.innerHTML = '<div class="no-result">검색 결과가 없습니다. 검색 조건을 다시 설정해주세요.</div>';
       resultsDiv.innerHTML = '';
       guideBoxDiv.style.display = 'block';
       return;
     }
 
+    statusDiv.innerHTML = '';
     guideBoxDiv.style.display = 'none';
 
     let html = '';
@@ -503,6 +513,7 @@
     btn.innerText = '갱신 시작';
   }
 
+  // 평문을 SHA-256 해시(Hex 문자열)로 변환하는 함수
   async function hashPassword(password) {
     const msgUint8 = new TextEncoder().encode(password);
     const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
@@ -548,8 +559,10 @@
     btn.innerText = '갱신 중...';
 
     try {
+      // 1. 입력받은 비밀번호를 해시 처리
       const hashedPw = await hashPassword(pw);
 
+      // 2. 해시된 값을 백엔드로 전송
       const res = await fetch('/api/rebuild', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
