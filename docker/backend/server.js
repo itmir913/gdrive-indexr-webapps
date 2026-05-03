@@ -30,9 +30,9 @@ let isIndexing = false;
 // ── 로거 ─────────────────────────────────────────────────────────────────────
 const ts = () => new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Seoul' });
 const log = {
-    info:  (tag, msg) => console.log(`[${ts()}]\t[INFO]\t[${tag}]\t\t${msg}`),
-    warn:  (tag, msg) => console.warn(`[${ts()}]\t[WARN]\t[${tag}]\t\t${msg}`),
-    error: (tag, msg) => console.error(`[${ts()}]\t[ERROR]\t[${tag}]\t\t${msg}`),
+    info:  (tag, msg) => console.log(`[${ts()}]\t[INFO ]\t[${tag.padEnd(9)}]\t${msg}`),
+    warn:  (tag, msg) => console.warn(`[${ts()}]\t[WARN ]\t[${tag.padEnd(9)}]\t${msg}`),
+    error: (tag, msg) => console.error(`[${ts()}]\t[ERROR]\t[${tag.padEnd(9)}]\t${msg}`),
 };
 
 // ── DB 초기화 ────────────────────────────────────────────────────────────────
