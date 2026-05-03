@@ -142,18 +142,35 @@
       margin: 10px 0;
     }
 
+    /* ── 결과 헤더 (개수 + 뷰 토글) ── */
+    .results-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .results-count { font-size: 0.9rem; color: var(--text-sub); }
+    .view-toggle { display: flex; gap: 4px; }
+    .view-btn {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 5px 12px; border-radius: 8px;
+      border: 1px solid var(--border-color); background: var(--card-bg);
+      font-family: inherit; font-size: 0.85rem; font-weight: 600;
+      color: var(--text-sub); cursor: pointer; transition: all 0.15s;
+    }
+    .view-btn:hover { background: #f1f3f4; }
+    .view-btn.active { background: var(--primary-color); color: #fff; border-color: var(--primary-color); }
+
     /* ── 검색 결과 카드 ── */
     /* 기본 상태: 모바일 등 1024px 미만일 때 (1열 배치) */
-    #results {
+    #results.view-card .view-body {
       display: grid;
-      grid-template-columns: 1fr; /* 1열 */
+      grid-template-columns: 1fr;
       gap: 16px;
     }
 
     /* 1024px 이상 화면: PC, 태블릿 (2열 배치) */
     @media (min-width: 1024px) {
-      #results {
-        grid-template-columns: repeat(2, 1fr); /* 2열 (1fr 1fr과 동일) */
+      #results.view-card .view-body {
+        grid-template-columns: repeat(2, 1fr);
       }
     }
 
@@ -174,6 +191,57 @@
       padding: 8px 16px; border-radius: 8px; background-color: #f8f9fa; transition: background-color 0.2s;
     }
     .drive-link:hover { background-color: #e8eaed; text-decoration: none; }
+
+    /* ── 검색 결과 표 ── */
+    #results.view-table { display: block; }
+
+    .result-table {
+      width: 100%; border-collapse: collapse;
+      background: var(--card-bg); border-radius: 12px; overflow: hidden;
+      border: 1px solid #d0d3d8;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+      table-layout: fixed;
+    }
+    .result-table thead th {
+      background: #f8f9fa; padding: 10px 14px;
+      font-size: 0.82rem; font-weight: 700; color: var(--text-sub);
+      text-align: left; border-bottom: 1px solid var(--border-color);
+    }
+    .result-table .col-name { width: 60%; }
+    .result-table .col-tags { width: 40%; }
+
+    .result-row {
+      cursor: pointer;
+    }
+    .result-row td {
+      padding: 10px 14px; border-bottom: 1px solid var(--border-color);
+      font-size: 0.9rem; overflow: visible; vertical-align: middle;
+    }
+    .result-row:last-child td { border-bottom: none; }
+    .result-row:hover { background-color: #f0f4ff; }
+
+    /* 텍스트 생략은 td 안 span이 담당, td는 overflow:visible 유지 (툴팁이 td 밖으로 나와야 함) */
+    .td-name { font-weight: 600; color: var(--text-main); }
+    .td-tags { color: var(--text-sub); }
+    .td-name .cell-text,
+    .td-tags .cell-text {
+      display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+    }
+
+    /* 툴팁 (PC hover 전용) */
+    @media (hover: hover) {
+      [data-tooltip] { position: relative; cursor: pointer; }
+      [data-tooltip]:hover::after {
+        content: attr(data-tooltip);
+        position: absolute; top: calc(100% + 4px); left: 0; z-index: 200;
+        background: #333; color: #fff; font-size: 0.8rem; font-weight: 400;
+        padding: 6px 10px; border-radius: 6px;
+        white-space: pre-wrap; word-break: break-all;
+        max-width: 400px; min-width: 60px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+        pointer-events: none;
+      }
+    }
 
     /* 기타 안내 */
     .error-msg { color: #d93025; }
@@ -351,6 +419,22 @@
   const resultsDiv = document.getElementById('results');
   const guideBoxDiv = document.getElementById('guide-box');
 
+  let currentView = 'card';
+  let lastResults = null;
+
+  function setView(view) {
+    currentView = view;
+    document.querySelectorAll('.view-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.view === view);
+    });
+    resultsDiv.className = 'view-' + view;
+    const body = view === 'card' ? renderCardView(lastResults) : renderTableView(lastResults);
+    const bodyContainer = resultsDiv.querySelector('.view-body');
+    if (bodyContainer) {
+      bodyContainer.innerHTML = body;
+    }
+  }
+
   // 헬스체크 (최초 + 30초마다)
   function updateHealth() {
     const badge = document.getElementById('healthBadge');
@@ -432,7 +516,6 @@
     statusDiv.innerHTML = '';
 
     if (!results || results.length === 0) {
-      // 검색 결과가 없을 경우 메시지와 함께 가이드를 다시 보여줌
       statusDiv.innerHTML = '<div class="no-result">검색 결과가 없습니다. 검색 조건을 다시 설정해주세요.</div>';
       resultsDiv.innerHTML = '';
       guideBoxDiv.style.display = 'block';
@@ -441,24 +524,65 @@
 
     statusDiv.innerHTML = '';
     guideBoxDiv.style.display = 'none';
+    lastResults = results;
 
+    const header = `
+      <div class="results-header">
+        <span class="results-count">검색 결과 ${results.length.toLocaleString()}개</span>
+        <div class="view-toggle">
+          <button class="view-btn${currentView === 'card' ? ' active' : ''}" data-view="card" onclick="setView('card')">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="0" y="0" width="7" height="7" rx="1"/><rect x="9" y="0" width="7" height="7" rx="1"/><rect x="0" y="9" width="7" height="7" rx="1"/><rect x="9" y="9" width="7" height="7" rx="1"/></svg>
+            카드
+          </button>
+          <button class="view-btn${currentView === 'table' ? ' active' : ''}" data-view="table" onclick="setView('table')">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="0" y="0" width="16" height="3" rx="1"/><rect x="0" y="5" width="16" height="3" rx="1"/><rect x="0" y="10" width="16" height="3" rx="1"/><rect x="0" y="15" width="16" height="1" rx="0.5"/></svg>
+            표
+          </button>
+        </div>
+      </div>`;
+
+    const body = currentView === 'card' ? renderCardView(results) : renderTableView(results);
+    resultsDiv.className = 'view-' + currentView;
+    resultsDiv.innerHTML = header + `<div class="view-body">${body}</div>`;
+  }
+
+  function renderCardView(results) {
     let html = '';
     results.forEach(function(item) {
       const tags = (item.path || '').split('/').filter(s => s.length > 0);
       const tagHtml = tags.map(t => '<span class="tag">' + escHtml(t) + '</span>').join('');
-
       const safeUrl = /^https?:\/\//i.test(item.url) ? item.url : '#';
       html += `
-          <div class="result-item">
-            <div class="result-name">${escHtml(item.name)}</div>
-            ${tagHtml ? `<div class="tag-row">${tagHtml}</div>` : ''}
-            <a class="drive-link" href="${escHtml(safeUrl)}" target="_blank" rel="noopener">
-              드라이브에서 열기 ↗
-            </a>
-          </div>
-        `;
+        <div class="result-item">
+          <div class="result-name">${escHtml(item.name)}</div>
+          ${tagHtml ? `<div class="tag-row">${tagHtml}</div>` : ''}
+          <a class="drive-link" href="${escHtml(safeUrl)}" target="_blank" rel="noopener">드라이브에서 열기 ↗</a>
+        </div>`;
     });
-    resultsDiv.innerHTML = html;
+    return html;
+  }
+
+  function renderTableView(results) {
+    let rows = '';
+    results.forEach(function(item) {
+      const tags = (item.path || '').split('/').filter(s => s.length > 0);
+      const tagText = tags.join(' › ');
+      const safeUrl = /^https?:\/\//i.test(item.url) ? item.url : '#';
+      rows += `
+        <tr class="result-row" onclick="window.open('${escHtml(safeUrl)}', '_blank', 'noopener')">
+          <td class="td-name" data-tooltip="${escHtml(item.name)}"><span class="cell-text">${escHtml(item.name)}</span></td>
+          <td class="td-tags"${tagText ? ` data-tooltip="${escHtml(tagText)}"` : ''}><span class="cell-text">${escHtml(tagText)}</span></td>
+        </tr>`;
+    });
+
+    return `
+      <table class="result-table">
+        <thead><tr>
+          <th class="col-name">이름</th>
+          <th class="col-tags">태그</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
   }
 
   function handleError(error) {
