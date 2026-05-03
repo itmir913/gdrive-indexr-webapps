@@ -163,37 +163,30 @@
     #results.view-card .view-body {
       display: grid;
       grid-template-columns: 1fr;
-      gap: 0;
-      background: var(--card-bg);
-      border: 1px solid #d0d3d8;
-      border-radius: 12px;
-      overflow: hidden;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+      gap: 12px;
     }
 
-    @media (min-width: 1024px) {
+    @media (min-width: 768px) {
       #results.view-card .view-body {
         grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (min-width: 1280px) {
+      #results.view-card .view-body {
+        grid-template-columns: repeat(3, 1fr);
       }
     }
 
     .result-item {
       display: flex; flex-direction: column; gap: 8px;
       padding: 14px 18px;
-      border-bottom: 1px solid var(--border-color);
+      background: var(--card-bg);
+      border: 1px solid #d0d3d8;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.08);
       cursor: pointer;
       transition: background-color 0.15s;
-    }
-    /* 2열일 때 오른쪽 열 아이템에 왼쪽 border */
-    @media (min-width: 1024px) {
-      .result-item:nth-child(even) { border-left: 1px solid var(--border-color); }
-      /* 마지막 두 아이템의 하단 border 제거 */
-      .result-item:nth-last-child(-n+2):nth-child(odd),
-      .result-item:nth-last-child(-n+2):nth-child(odd) ~ .result-item { border-bottom: none; }
-    }
-    /* 1열일 때 마지막 아이템 하단 border 제거 */
-    @media (max-width: 1023px) {
-      .result-item:last-child { border-bottom: none; }
     }
     .result-item:hover { background-color: #f0f4ff; }
 
