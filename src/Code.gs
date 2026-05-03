@@ -283,7 +283,7 @@ function _getChunkedCache(cache, baseKey) {
 
 // ── 키워드 → fileId 배열 (캐시 우선) ────────────────────────────────────────
 function getFileIdsForKeyword(keyword) {
-  keyword = keyword.toLowerCase().trim();
+  keyword = keyword.replace(/['"]/g, '').toLowerCase().trim();
   const baseKey = 'kw_' + keyword;
   const cache = CacheService.getScriptCache();
 
@@ -311,7 +311,7 @@ function driveFullTextSearch(keyword) {
   // Advanced Drive Service (Drive API v3) 필요
   // Apps Script 편집기 → 서비스 → Drive API v3 추가
   const escaped = keyword.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-  const q = `(name contains '${escaped}' or fullText contains '${escaped}') and trashed=false`;
+  const q = `fullText contains '"${escaped}"' and trashed=false`;
   const opt = {
     q                    : q,
     fields               : 'nextPageToken, files(id)',
