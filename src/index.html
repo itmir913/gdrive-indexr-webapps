@@ -125,38 +125,106 @@
       margin: 10px 0;
     }
 
+    /* ── 결과 헤더 (개수 + 뷰 토글) ── */
+    .results-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .results-count { font-size: 0.9rem; color: var(--text-sub); }
+    .view-toggle { display: flex; gap: 4px; }
+    .view-btn {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 5px 12px; border-radius: 8px;
+      border: 1px solid var(--border-color); background: var(--card-bg);
+      font-family: inherit; font-size: 0.85rem; font-weight: 600;
+      color: var(--text-sub); cursor: pointer; transition: all 0.15s;
+    }
+    .view-btn:hover { background: #f1f3f4; }
+    .view-btn.active { background: var(--primary-color); color: #fff; border-color: var(--primary-color); }
+
     /* ── 검색 결과 카드 ── */
-    /* 기본 상태: 모바일 등 1024px 미만일 때 (1열 배치) */
-    #results {
+    #results.view-card .view-body {
       display: grid;
-      grid-template-columns: 1fr; /* 1열 */
-      gap: 16px;
+      grid-template-columns: 1fr;
+      gap: 12px;
     }
 
-    /* 1024px 이상 화면: PC, 태블릿 (2열 배치) */
-    @media (min-width: 1024px) {
-      #results {
-        grid-template-columns: repeat(2, 1fr); /* 2열 (1fr 1fr과 동일) */
+    @media (min-width: 768px) {
+      #results.view-card .view-body {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (min-width: 1280px) {
+      #results.view-card .view-body {
+        grid-template-columns: repeat(3, 1fr);
       }
     }
 
     .result-item {
-      background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 16px;
-      padding: 1.5rem; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02); transition: transform 0.2s ease, box-shadow 0.2s ease;
-      display: flex; flex-direction: column; gap: 12px;
+      display: flex; flex-direction: column; gap: 8px;
+      padding: 14px 18px;
+      background: var(--card-bg);
+      border: 1px solid #d0d3d8;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+      cursor: pointer;
+      transition: background-color 0.15s;
     }
-    .result-item:hover { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08); border-color: transparent; }
-    .result-name { font-size: 1.15rem; font-weight: 600; color: var(--text-main); word-break: break-all; }
+    .result-item:hover { background-color: #f0f4ff; }
 
-    .tag-row { display: flex; flex-wrap: wrap; gap: 6px; }
-    .tag { background-color: #e8f0fe; color: #1967d2; font-size: 0.8rem; font-weight: 500; padding: 4px 10px; border-radius: 20px; }
+    .result-name { font-size: 0.95rem; font-weight: 600; color: var(--text-main); word-break: break-word; line-height: 1.4; }
 
-    .drive-link {
-      align-self: flex-start; display: inline-flex; align-items: center; margin-top: 4px;
-      font-size: 0.9rem; font-weight: 600; color: var(--primary-color); text-decoration: none;
-      padding: 8px 16px; border-radius: 8px; background-color: #f8f9fa; transition: background-color 0.2s;
+    .tag-row { display: flex; flex-wrap: wrap; gap: 5px; }
+    .tag { background-color: #e8f0fe; color: #1967d2; font-size: 0.75rem; font-weight: 500; padding: 3px 8px; border-radius: 20px; }
+
+    /* ── 검색 결과 표 ── */
+    #results.view-table { display: block; }
+
+    .result-table {
+      width: 100%; border-collapse: collapse;
+      background: var(--card-bg); border-radius: 12px; overflow: hidden;
+      outline: 1px solid #d0d3d8;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+      table-layout: fixed;
     }
-    .drive-link:hover { background-color: #e8eaed; text-decoration: none; }
+    .result-table thead th {
+      background: #f8f9fa; padding: 10px 14px;
+      font-size: 0.82rem; font-weight: 700; color: var(--text-sub);
+      text-align: left; border-bottom: 1px solid var(--border-color);
+    }
+    .result-table .col-name { width: 60%; }
+    .result-table .col-tags { width: 40%; }
+
+    .result-row { cursor: pointer; }
+    .result-row td {
+      padding: 10px 14px; border-bottom: 1px solid var(--border-color);
+      font-size: 0.9rem; overflow: visible; vertical-align: middle;
+    }
+    .result-row:last-child td { border-bottom: none; }
+    .result-row:hover { background-color: #f0f4ff; }
+
+    .td-name { font-weight: 600; color: var(--text-main); }
+    .td-tags { color: var(--text-sub); }
+    .td-name .cell-text,
+    .td-tags .cell-text {
+      display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+    }
+
+    /* 툴팁 (PC hover 전용) */
+    @media (hover: hover) {
+      [data-tooltip] { position: relative; cursor: pointer; }
+      [data-tooltip]:hover::after {
+        content: attr(data-tooltip);
+        position: absolute; top: calc(100% + 4px); left: 0; z-index: 200;
+        background: #333; color: #fff; font-size: 0.8rem; font-weight: 400;
+        padding: 6px 10px; border-radius: 6px;
+        white-space: pre-wrap; word-break: break-all;
+        max-width: 400px; min-width: 60px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+        pointer-events: none;
+      }
+    }
 
     /* 기타 안내 */
     .error-msg { color: #d93025; }
@@ -188,7 +256,9 @@
       top: 0; left: 0; width: 100%; height: 100%;
       background: rgba(0,0,0,0.5);
       z-index: 1000;
-      align-items: center; justify-content: center;
+      align-items: flex-start; justify-content: center;
+      overflow-y: auto;
+      padding: 1.5rem 0;
     }
     .modal {
       background: white;
@@ -197,6 +267,7 @@
       width: 90%;
       max-width: 400px;
       box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+      margin: auto;
     }
     .modal h2 { font-size: 1.2rem; margin-bottom: 1rem; }
     .modal input {
@@ -294,6 +365,22 @@
   const resultsDiv = document.getElementById('results');
   const guideBoxDiv = document.getElementById('guide-box');
 
+  let currentView = 'table';
+  let lastResults = null;
+
+  function setView(view) {
+    currentView = view;
+    document.querySelectorAll('.view-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.view === view);
+    });
+    resultsDiv.className = 'view-' + view;
+    const body = view === 'card' ? renderCardView(lastResults) : renderTableView(lastResults);
+    const bodyContainer = resultsDiv.querySelector('.view-body');
+    if (bodyContainer) {
+      bodyContainer.innerHTML = body;
+    }
+  }
+
   function escHtml(str) {
     if (!str) return '';
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -317,7 +404,7 @@
 
     // AND/OR/NOT·괄호를 경계로 키워드 토큰을 분리하여 각각 2글자 이상 검증
     const keywords = query.split(/\b(?:AND|OR|NOT)\b|[()]/i)
-      .map(k => k.trim()).filter(k => k.length > 0);
+            .map(k => k.trim()).filter(k => k.length > 0);
     if (keywords.length === 0 || keywords.some(k => k.length < 2)) {
       alert('검색어는 두 글자 이상 입력해 주세요.');
       return;
@@ -344,7 +431,6 @@
     statusDiv.innerHTML = '';
 
     if (!results || results.length === 0) {
-      // 검색 결과가 없을 경우 메시지와 함께 가이드를 다시 보여줌
       statusDiv.innerHTML = '<div class="no-result">검색 결과가 없습니다. 검색 조건을 다시 설정해주세요.</div>';
       resultsDiv.innerHTML = '';
       guideBoxDiv.style.display = 'block';
@@ -353,24 +439,65 @@
 
     statusDiv.innerHTML = '';
     guideBoxDiv.style.display = 'none';
+    lastResults = results;
 
+    const header = `
+      <div class="results-header">
+        <span class="results-count">검색 결과 ${results.length.toLocaleString()}개</span>
+        <div class="view-toggle">
+          <button class="view-btn${currentView === 'table' ? ' active' : ''}" data-view="table" onclick="setView('table')">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="0" y="0" width="16" height="3" rx="1"/><rect x="0" y="5" width="16" height="3" rx="1"/><rect x="0" y="10" width="16" height="3" rx="1"/><rect x="0" y="15" width="16" height="1" rx="0.5"/></svg>
+            표
+          </button>
+          <button class="view-btn${currentView === 'card' ? ' active' : ''}" data-view="card" onclick="setView('card')">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="0" y="0" width="7" height="7" rx="1"/><rect x="9" y="0" width="7" height="7" rx="1"/><rect x="0" y="9" width="7" height="7" rx="1"/><rect x="9" y="9" width="7" height="7" rx="1"/></svg>
+            카드
+          </button>
+        </div>
+      </div>`;
+
+    const body = currentView === 'card' ? renderCardView(results) : renderTableView(results);
+    resultsDiv.className = 'view-' + currentView;
+    resultsDiv.innerHTML = header + `<div class="view-body">${body}</div>`;
+  }
+
+  function renderCardView(results) {
     let html = '';
     results.forEach(function(item) {
       const tags = (item.path || '').split('/').filter(s => s.length > 0);
       const tagHtml = tags.map(t => '<span class="tag">' + escHtml(t) + '</span>').join('');
 
-      const safeUrl = /^https?:\/\//i.test(item.url) ? item.url : '#';
+      const safeUrl = (item.url && (item.url.startsWith('https:\/\/') || item.url.startsWith('http:\/\/'))) ? item.url : '#';
       html += `
-          <div class="result-item">
-            <div class="result-name">${escHtml(item.name)}</div>
-            ${tagHtml ? `<div class="tag-row">${tagHtml}</div>` : ''}
-            <a class="drive-link" href="${escHtml(safeUrl)}" target="_blank" rel="noopener">
-              드라이브에서 열기 ↗
-            </a>
-          </div>
-        `;
+        <div class="result-item" onclick="window.open('${escHtml(safeUrl)}', '_blank', 'noopener')">
+          <div class="result-name">${escHtml(item.name)}</div>
+          ${tagHtml ? `<div class="tag-row">${tagHtml}</div>` : ''}
+        </div>`;
     });
-    resultsDiv.innerHTML = html;
+    return html;
+  }
+
+  function renderTableView(results) {
+    let rows = '';
+    results.forEach(function(item) {
+      const tags = (item.path || '').split('/').filter(s => s.length > 0);
+      const tagText = tags.join(' › ');
+      const safeUrl = (item.url && (item.url.startsWith('https:\/\/') || item.url.startsWith('http:\/\/'))) ? item.url : '#';
+      rows += `
+        <tr class="result-row" onclick="window.open('${escHtml(safeUrl)}', '_blank', 'noopener')">
+          <td class="td-name" data-tooltip="${escHtml(item.name)}"><span class="cell-text">${escHtml(item.name)}</span></td>
+          <td class="td-tags"${tagText ? ` data-tooltip="${escHtml(tagText)}"` : ''}><span class="cell-text">${escHtml(tagText)}</span></td>
+        </tr>`;
+    });
+
+    return `
+      <table class="result-table">
+        <thead><tr>
+          <th class="col-name">이름</th>
+          <th class="col-tags">경로</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
   }
 
   function handleError(error) {
