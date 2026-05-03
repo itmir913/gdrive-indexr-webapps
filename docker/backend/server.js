@@ -151,7 +151,7 @@ async function driveFullTextSearch(keyword) {
     if (!isAuthenticated()) return [];
     const drive = getDriveClient();
     const escaped = keyword.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    const q = `(name contains '${escaped}' or fullText contains '${escaped}') and trashed=false`;
+    const q = `fullText contains '"${escaped}"' and trashed=false`;
     const ids = [];
     let pageToken = null;
 
@@ -222,6 +222,7 @@ function setCachedFileIds(keyword, fileIds) {
 
 // ── 키워드 → fileId 배열 (캐시 → Drive 검색 → 로컬 인덱스 합산) ──────────────
 async function getFileIdsForKeyword(keyword) {
+    keyword = keyword.replace(/['"]/g, '');
     const cached = await getCachedFileIds(keyword);
     if (cached !== null) {
         log.info('Drive', `캐시 히트: "${keyword}" → ${cached.length}건`);
