@@ -149,7 +149,6 @@ function loadIndexToMemory() {
 // ── Drive 전체 텍스트 검색 ───────────────────────────────────────────────────
 async function driveFullTextSearch(keyword) {
     if (!isAuthenticated()) return [];
-    log.info('Drive', `구글 드라이브 검색 요청: "${keyword}"`);
     const drive = getDriveClient();
     const escaped = keyword.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     const q = `(name contains '${escaped}' or fullText contains '${escaped}') and trashed=false`;
@@ -171,6 +170,7 @@ async function driveFullTextSearch(keyword) {
         pageToken = response.data.nextPageToken || null;
     } while (pageToken);
 
+    log.info('Drive', `Drive 검색 완료: "${keyword}" → ${ids.length}건`);
     return ids;
 }
 
@@ -209,7 +209,12 @@ function setCachedFileIds(keyword, fileIds) {
         db.run(
             'INSERT OR REPLACE INTO keyword_cache (keyword, fileIds, cachedAt) VALUES (?, ?, ?)',
             [keyword, JSON.stringify(fileIds), Date.now()],
-            (err) => { if (err) { db.run('ROLLBACK'); return log.error('Cache', `캐시 저장 실패 [${keyword}]: ${err.message}`); } }
+            (err) => {
+                if (err) {
+                    db.run('ROLLBACK');
+                    return log.error('Cache', `캐시 저장 실패 [${keyword}]: ${err.message}`);
+                }
+            }
         );
         db.run('COMMIT');
     });
@@ -219,13 +224,13 @@ function setCachedFileIds(keyword, fileIds) {
 async function getFileIdsForKeyword(keyword) {
     const cached = await getCachedFileIds(keyword);
     if (cached !== null) {
-        log.info('Drive', `캐시 히트: "${keyword}"`);
+        log.info('Drive', `캐시 히트: "${keyword}" → ${cached.length}건`);
         return cached;
     }
 
     const [driveIds, nameIds] = await Promise.all([
         driveFullTextSearch(keyword).catch(e => {
-            log.error('Drive', `전체 텍스트 검색 실패 [${keyword}]: ${e.message}`);
+            log.error('Drive', `검색 실패 "${keyword}": ${e.message}`);
             return [];
         }),
         Promise.resolve(getNameMatches(keyword)),
@@ -255,7 +260,7 @@ async function rebuildMetadataIndex() {
         return 'skipped';
     }
     if (!FOLDER_ID) {
-        log.error('Index', 'FOLDER_ID 환경변수가 설정되지 않았습니다');
+        log.error('Index', 'FOLDER_ID 환경변수 미설정');
         return 'error';
     }
 
@@ -342,7 +347,7 @@ async function rebuildMetadataIndex() {
             });
         });
 
-        log.info('Index', `인덱싱 완료 (${fileRows.length}개 파일)`);
+        log.info('Index', `인덱싱 완료: (${fileRows.length}개 파일)`);
         await loadIndexToMemory();
         return 'done';
     } catch (e) {
@@ -376,7 +381,7 @@ app.post('/api/auth/initiate', (req, res) => {
         res.status(200).json({ url: authUrl });
     } catch (e) {
         log.error('Auth', `credentials.json 로드 실패: ${e.message}`);
-        res.status(500).json({ error: '서버 설정 오류: credentials.json을 확인하세요.' });
+        res.status(500).json({ error: '서버 오류: credentials.json을 확인하세요.' });
     }
 });
 
@@ -394,7 +399,7 @@ app.get('/oauth/callback', async (req, res) => {
         res.redirect('/');
     } catch (e) {
         log.error('Auth', `OAuth 콜백 오류: ${e.message}`);
-        res.status(500).send('인증에 실패했습니다. 다시 시도하세요.');
+        res.status(500).send('OAuth 인증에 실패했습니다. 다시 시도하세요.');
     }
 });
 
@@ -441,7 +446,7 @@ app.post('/api/rebuild', (req, res) => {
         return res.status(409).json({ message: '인덱싱이 이미 진행 중입니다.' });
     }
 
-    log.info('Admin', '인덱스 재빌드 요청 수락');
+    log.info('Admin', '인덱스 재빌드 요청 — 수락');
     res.status(202).json({ message: '인덱싱을 시작합니다.' });
     rebuildMetadataIndex().catch(e => log.error('Index', e.message));
 });
@@ -484,7 +489,7 @@ function purgeStaleKeywords() {
         db.run('DELETE FROM keyword_log WHERE lastSearchDay < ?', [cutoffStr],
             function (err) {
                 if (err) { db.run('ROLLBACK'); return log.error('Purge', `키워드 정리 실패: ${err.message}`); }
-                log.info('Purge', `만료 키워드 ${this.changes}개 삭제`);
+                log.info('Purge', `만료 키워드 ${this.changes}개 삭제 완료`);
             }
         );
         db.run('COMMIT');
