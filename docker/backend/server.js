@@ -170,7 +170,7 @@ async function driveFullTextSearch(keyword) {
         pageToken = response.data.nextPageToken || null;
     } while (pageToken);
 
-    log.info('Drive', `Drive 검색: "${keyword}" → ${ids.length}건`);
+    log.info('Drive', `Drive 검색: [${keyword}] → [${ids.length}]건`);
     return ids;
 }
 
@@ -225,7 +225,7 @@ async function getFileIdsForKeyword(keyword) {
     keyword = keyword.replace(/['"]/g, '');
     const cached = await getCachedFileIds(keyword);
     if (cached !== null) {
-        log.info('Drive', `캐시 히트: "${keyword}" → ${cached.length}건`);
+        log.info('Drive', `캐시 히트: [${keyword}] → [${cached.length}]건`);
         return cached;
     }
 
@@ -348,7 +348,7 @@ async function rebuildMetadataIndex() {
             });
         });
 
-        log.info('Index', `인덱싱 완료 → ${fileRows.length}개 파일`);
+        log.info('Index', `인덱싱 완료 → [${fileRows.length}]개 파일`);
         await loadIndexToMemory();
         return 'done';
     } catch (e) {
@@ -396,7 +396,7 @@ app.get('/oauth/callback', async (req, res) => {
         fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens, null, 2));
         log.info('Auth', 'OAuth 인증 완료, token.json 저장');
 
-        rebuildMetadataIndex().catch(e => log.error('Index', e.message));
+        rebuildMetadataIndex().catch(e => log.error('Index', `인덱스 생성 실패: ${e.message}`));
         res.redirect('/');
     } catch (e) {
         log.error('Auth', `OAuth 콜백 오류: ${e.message}`);
@@ -426,7 +426,7 @@ app.get('/api/search', async (req, res) => {
             .filter(Boolean)
             .sort((a, b) => a.path.localeCompare(b.path, 'ko') || a.name.localeCompare(b.name, 'ko'));
 
-        log.info('Search', `"${query}" → ${results.length}건`);
+        log.info('Search', `[${query}] → [${results.length}]건`);
         logKeyword(query);
         res.json(results);
     } catch (e) {
@@ -449,7 +449,7 @@ app.post('/api/rebuild', (req, res) => {
 
     log.info('Admin', '인덱스 재빌드 요청 — 수락');
     res.status(202).json({ message: '인덱싱을 시작합니다.' });
-    rebuildMetadataIndex().catch(e => log.error('Index', e.message));
+    rebuildMetadataIndex().catch(e => log.error('Index', `인덱스 생성 실패: ${e.message}`));
 });
 
 // ── 헬스체크 ─────────────────────────────────────────────────────────────────
@@ -490,7 +490,7 @@ function purgeStaleKeywords() {
         db.run('DELETE FROM keyword_log WHERE lastSearchDay < ?', [cutoffStr],
             function (err) {
                 if (err) { db.run('ROLLBACK'); return log.error('Purge', `키워드 정리 실패: ${err.message}`); }
-                log.info('Purge', `만료 키워드 ${this.changes}개 삭제 완료`);
+                log.info('Purge', `만료 키워드 [${this.changes}]개 삭제 완료`);
             }
         );
         db.run('COMMIT');
@@ -511,7 +511,7 @@ function warmCache() {
                 [...extractKeywords(tree)].forEach(kw => getNameMatches(kw));
                 warmed++;
             }
-            log.info('WarmCache', `로컬 인덱스 ${warmed}개 키워드 사전 로드 완료`);
+            log.info('WarmCache', `로컬 인덱스 [${warmed}]개 키워드 사전 로드 완료`);
         }
     );
 }
@@ -526,7 +526,7 @@ initDB()
     .then(() => loadIndexToMemory())
     .then(() => {
         app.listen(PORT, () => {
-            log.info('Server', `포트 ${PORT}에서 가동 중`);
+            log.info('Server', `포트 [${PORT}]에서 가동 중`);
             if (!isAuthenticated()) {
                 log.warn('Auth', '미인증 상태 — 프론트엔드 관리자 모달에서 Google 로그인 필요');
             }
