@@ -170,7 +170,7 @@ async function driveFullTextSearch(keyword) {
         pageToken = response.data.nextPageToken || null;
     } while (pageToken);
 
-    log.info('Drive', `Drive 검색 완료: "${keyword}" → ${ids.length}건`);
+    log.info('Drive', `Drive 검색: "${keyword}" → ${ids.length}건`);
     return ids;
 }
 
@@ -230,7 +230,7 @@ async function getFileIdsForKeyword(keyword) {
 
     const [driveIds, nameIds] = await Promise.all([
         driveFullTextSearch(keyword).catch(e => {
-            log.error('Drive', `검색 실패 "${keyword}": ${e.message}`);
+            log.error('Drive', `검색 실패 [${keyword}]: ${e.message}`);
             return [];
         }),
         Promise.resolve(getNameMatches(keyword)),
@@ -252,11 +252,11 @@ function extractKeywords(node) {
 // ── 인덱스 재빌드 ────────────────────────────────────────────────────────────
 async function rebuildMetadataIndex() {
     if (!isAuthenticated()) {
-        log.warn('Index', '인증되지 않음, 인덱싱 건너뜀');
+        log.warn('Index', '인증되지 않음 — 인덱싱 건너뜀');
         return 'unauthenticated';
     }
     if (isIndexing) {
-        log.warn('Index', '이미 실행 중, 건너뜀');
+        log.warn('Index', '이미 실행 중 — 인덱싱 건너뜀');
         return 'skipped';
     }
     if (!FOLDER_ID) {
@@ -347,7 +347,7 @@ async function rebuildMetadataIndex() {
             });
         });
 
-        log.info('Index', `인덱싱 완료: (${fileRows.length}개 파일)`);
+        log.info('Index', `인덱싱 완료 → ${fileRows.length}개 파일`);
         await loadIndexToMemory();
         return 'done';
     } catch (e) {
