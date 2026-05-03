@@ -282,7 +282,9 @@
       top: 0; left: 0; width: 100%; height: 100%;
       background: rgba(0,0,0,0.5);
       z-index: 1000;
-      align-items: center; justify-content: center;
+      align-items: flex-start; justify-content: center;
+      overflow-y: auto;
+      padding: 1.5rem 0;
     }
     .modal {
       background: white;
@@ -291,6 +293,7 @@
       width: 90%;
       max-width: 400px;
       box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+      margin: auto;
     }
     .modal h2 { font-size: 1.2rem; margin-bottom: 1rem; }
     .modal input {
