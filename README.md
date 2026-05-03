@@ -2,7 +2,9 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](https://opensource.org/licenses/MIT) [![GDrive Indexr](https://img.shields.io/badge/Website-GDrive_Indexr-blue.svg)](https://luminousky.com/teacher-utility-kit/gdrive-indexr/)
 
-<img width="70%" alt="Snipaste_2026-05-03_16-23-58" src="https://github.com/user-attachments/assets/e1e018ad-cd29-4569-9806-941a2b2a18d5" />
+
+<img width="70%" alt="Snipaste_2026-05-03_23-35-26" src="https://github.com/user-attachments/assets/f7428055-edeb-47ae-928e-73bd024b388e" />
+
 
 **GDrive Indexr**는 사용자의 Google Drive 폴더 내 파일명과 본문까지 Boolean 키워드로 빠르고 정교하게 찾아주는 통합 웹 검색 엔진입니다.
 
