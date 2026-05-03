@@ -149,6 +149,7 @@ function loadIndexToMemory() {
 // ── Drive 전체 텍스트 검색 ───────────────────────────────────────────────────
 async function driveFullTextSearch(keyword) {
     if (!isAuthenticated()) return [];
+    log.info('Drive', `구글 드라이브 검색 요청: "${keyword}"`);
     const drive = getDriveClient();
     const escaped = keyword.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     const q = `(name contains '${escaped}' or fullText contains '${escaped}') and trashed=false`;
@@ -217,7 +218,10 @@ function setCachedFileIds(keyword, fileIds) {
 // ── 키워드 → fileId 배열 (캐시 → Drive 검색 → 로컬 인덱스 합산) ──────────────
 async function getFileIdsForKeyword(keyword) {
     const cached = await getCachedFileIds(keyword);
-    if (cached !== null) return cached;
+    if (cached !== null) {
+        log.info('Drive', `캐시 히트: "${keyword}"`);
+        return cached;
+    }
 
     const [driveIds, nameIds] = await Promise.all([
         driveFullTextSearch(keyword).catch(e => {
