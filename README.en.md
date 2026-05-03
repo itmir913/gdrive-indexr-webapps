@@ -1,12 +1,16 @@
-# Google Drive Unified Search System
+# Google Drive Full-Text Search Web App
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](https://opensource.org/licenses/MIT) [![GDrive Indexr](https://img.shields.io/badge/Website-GDrive_Indexr-blue.svg)](https://luminousky.com/teacher-utility-kit/gdrive-indexr/)
+
+<img width="70%" alt="Snipaste_2026-05-03_16-23-58" src="https://github.com/user-attachments/assets/e1e018ad-cd29-4569-9806-941a2b2a18d5" />
 
 A web search engine that lets you search files stored in a Google Drive shared folder by filename and file contents using Boolean keywords.
-
-Two deployment options are available.
 
 ---
 
 ## Choose a Deployment Option
+
+Two deployment options are available.
 
 ### Google Apps Script (Serverless)
 

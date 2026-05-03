@@ -1,4 +1,4 @@
-# 구글 드라이브 통합검색 시스템
+# Google Drive 통합검색 시스템
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](https://opensource.org/licenses/MIT) [![GDrive Indexr](https://img.shields.io/badge/Website-GDrive_Indexr-blue.svg)](https://luminousky.com/teacher-utility-kit/gdrive-indexr/)
 

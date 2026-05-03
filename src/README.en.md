@@ -1,4 +1,4 @@
-# Google Drive Full-Text Search Web App (Google Apps Script)
+# gdrive-indexr — Google Apps Script Deployment Guide
 
 A serverless, no-signup full-text search web app for Google Drive — built entirely with Google Apps Script, Google Sheets, and Drive API v3. No external server required.
 

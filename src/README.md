@@ -1,4 +1,4 @@
-# 구글 드라이브 키워드 기반 통합검색 시스템
+# gdrive-indexr — Google Apps Script 배포 가이드
 
 구글 드라이브 공유 폴더에 저장된 자료를 파일 내부까지 키워드로 빠르게 검색할 수 있는 Google Apps Script 웹앱입니다.
 
