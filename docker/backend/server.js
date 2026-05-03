@@ -28,10 +28,11 @@ let fileIndexCache = new Map();
 let isIndexing = false;
 
 // ── 로거 ─────────────────────────────────────────────────────────────────────
+const ts = () => new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Seoul' });
 const log = {
-    info:  (tag, msg) => console.log(`[INFO]  [${tag}] ${msg}`),
-    warn:  (tag, msg) => console.warn(`[WARN]  [${tag}] ${msg}`),
-    error: (tag, msg) => console.error(`[ERROR] [${tag}] ${msg}`),
+    info:  (tag, msg) => console.log(`[${ts()}]\t[INFO]\t[${tag}]\t\t${msg}`),
+    warn:  (tag, msg) => console.warn(`[${ts()}]\t[WARN]\t[${tag}]\t\t${msg}`),
+    error: (tag, msg) => console.error(`[${ts()}]\t[ERROR]\t[${tag}]\t\t${msg}`),
 };
 
 // ── DB 초기화 ────────────────────────────────────────────────────────────────
