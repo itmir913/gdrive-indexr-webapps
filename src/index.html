@@ -439,6 +439,11 @@
 
     statusDiv.innerHTML = '';
     guideBoxDiv.style.display = 'none';
+    results.sort((a, b) => {
+      const pathCmp = (a.path || '').localeCompare(b.path || '', 'ko');
+      if (pathCmp !== 0) return pathCmp;
+      return (a.name || '').localeCompare(b.name || '', 'ko');
+    });
     lastResults = results;
 
     const header = `
