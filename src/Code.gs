@@ -44,7 +44,7 @@ function setupTriggers() {
 // ── 진입점 ───────────────────────────────────────────────────────────────────
 function doGet(e) {
   return HtmlService.createHtmlOutputFromFile('index')
-    .setTitle('대학진학자료 통합검색기');
+    .setTitle('대입진학자료 통합검색기');
 }
 
 function _rebuildMetadataIndexImpl() {
