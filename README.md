@@ -6,6 +6,9 @@
 <img width="70%" alt="Snipaste_2026-05-03_23-35-26" src="https://github.com/user-attachments/assets/f7428055-edeb-47ae-928e-73bd024b388e" />
 
 
+See [`README.en.md`](README.en.md) for the English version (AI-assisted).
+
+
 **GDrive Indexr**는 사용자의 Google Drive 폴더 내 파일명과 본문까지 Boolean 키워드로 빠르고 정교하게 찾아주는 통합 웹 검색 엔진입니다.
 
 ---

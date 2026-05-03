@@ -24,7 +24,7 @@ Two deployment options are available.
 - ~30 concurrent users limit
 - Boolean operators supported: `AND`, `OR`, `NOT`, parenthesis grouping
 
-→ See [`src/README.md`](src/README.md)
+→ See [`src/README.en.md`](src/README.en.md)
 
 ---
 
