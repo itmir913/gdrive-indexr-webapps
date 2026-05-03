@@ -140,7 +140,7 @@ function loadIndexToMemory() {
             const newMap = new Map();
             rows.forEach(row => newMap.set(row.fileId, row));
             fileIndexCache = newMap;
-            log.info('Cache', `${fileIndexCache.size}개 파일 로드 완료`);
+            log.info('Cache', `[${fileIndexCache.size}]개 파일 로드 완료`);
             resolve();
         });
     });
@@ -170,7 +170,7 @@ async function driveFullTextSearch(keyword) {
         pageToken = response.data.nextPageToken || null;
     } while (pageToken);
 
-    log.info('Drive', `Drive 검색: [${keyword}] → [${ids.length}]건`);
+    log.info('Drive', `드라이브 검색: [${keyword}] → [${ids.length}]건`);
     return ids;
 }
 
