@@ -11,6 +11,11 @@ services:
     volumes:
       - ./data:/app/data         # database.sqlite + credentials.json + token.json
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "10"
 
   nginx:
     build:
@@ -28,3 +33,8 @@ services:
       backend:
         condition: service_healthy
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "10"
