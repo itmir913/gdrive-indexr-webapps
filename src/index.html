@@ -181,14 +181,11 @@
     /* ── 검색 결과 표 ── */
     #results.view-table { display: block; }
 
-    .result-table-wrapper {
-      overflow: hidden; border-radius: 12px;
-      outline: 1px solid #d0d3d8;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.08);
-    }
     .result-table {
       width: 100%; border-collapse: collapse;
-      background: var(--card-bg);
+      background: var(--card-bg); border-radius: 12px;
+      outline: 1px solid #d0d3d8;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.08);
       table-layout: fixed;
     }
     .result-table thead th {
@@ -196,6 +193,8 @@
       font-size: 0.82rem; font-weight: 700; color: var(--text-sub);
       text-align: left; border-bottom: 1px solid var(--border-color);
     }
+    .result-table thead th:first-child { border-radius: 12px 0 0 0; }
+    .result-table thead th:last-child  { border-radius: 0 12px 0 0; }
     .result-table .col-name { width: 60%; }
     .result-table .col-tags { width: 40%; }
 
@@ -527,15 +526,13 @@
     });
 
     return `
-      <div class="result-table-wrapper">
       <table class="result-table">
         <thead><tr>
           <th class="col-name">이름</th>
           <th class="col-tags">경로</th>
         </tr></thead>
         <tbody>${rows}</tbody>
-      </table>
-      </div>`;
+      </table>`;
   }
 
   function handleError(error) {
