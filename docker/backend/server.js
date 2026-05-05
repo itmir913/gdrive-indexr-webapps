@@ -214,9 +214,9 @@ function setCachedFileIds(keyword, fileIds) {
                     db.run('ROLLBACK');
                     return log.error('Cache', `캐시 저장 실패 [${keyword}]: ${err.message}`);
                 }
+                db.run('COMMIT');
             }
         );
-        db.run('COMMIT');
     });
 }
 
@@ -475,8 +475,10 @@ function logKeyword(keyword) {
                 count = count + 1,
                 lastSearchDay = ?
         `, [keyword, today, today],
-        (err) => { if (err) { db.run('ROLLBACK'); return log.error('Log', `키워드 로그 실패 [${keyword}]: ${err.message}`); } });
-        db.run('COMMIT');
+        (err) => {
+            if (err) { db.run('ROLLBACK'); return log.error('Log', `키워드 로그 실패 [${keyword}]: ${err.message}`); }
+            db.run('COMMIT');
+        });
     });
 }
 
@@ -491,9 +493,9 @@ function purgeStaleKeywords() {
             function (err) {
                 if (err) { db.run('ROLLBACK'); return log.error('Purge', `키워드 정리 실패: ${err.message}`); }
                 log.info('Purge', `만료 키워드 [${this.changes}]개 삭제 완료`);
+                db.run('COMMIT');
             }
         );
-        db.run('COMMIT');
     });
 }
 
