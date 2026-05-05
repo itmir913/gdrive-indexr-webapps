@@ -762,6 +762,12 @@ function testBooleanParser() {
   check('빈 입력',              '',                     'EMPTY');
   check('단독 연산자',           'AND',                  'EMPTY');
 
+  // 연산자 부분 문자열 포함 키워드 — \b 경계 검증
+  check('android (and 포함)',   'android',              'android');
+  check('notable (not 포함)',   'notable',              'notable');
+  check('oracle (or 포함)',     'oracle',               'oracle');
+  check('android AND 논술',    'android AND 논술',     '(android AND 논술)');
+
   Logger.log('──────────────────────────');
   Logger.log('결과: ' + pass + '개 통과 / ' + fail + '개 실패');
   if (fail > 0) throw new Error(fail + '개 테스트 실패');
