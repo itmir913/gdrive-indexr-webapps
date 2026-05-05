@@ -504,16 +504,23 @@ function warmCache() {
     db.all(
         'SELECT keyword FROM keyword_log ORDER BY count DESC, lastSearchDay DESC LIMIT ?',
         [PRECACHE_TOP_N],
-        (err, rows) => {
+        async (err, rows) => {
             if (err) return log.error('WarmCache', `키워드 조회 실패: ${err.message}`);
             let warmed = 0;
             for (const { keyword } of rows) {
                 const tokens = tokenize(keyword);
                 const tree = new BooleanParser(tokens).parse();
-                [...extractKeywords(tree)].forEach(kw => getNameMatches(kw));
+                const kws = [...extractKeywords(tree)];
+                for (const kw of kws) {
+                    const cached = await getCachedFileIds(kw);
+                    if (cached !== null) continue;
+                    await getFileIdsForKeyword(kw).catch(e =>
+                        log.error('WarmCache', `워밍 실패 [${kw}]: ${e.message}`)
+                    );
+                }
                 warmed++;
             }
-            log.info('WarmCache', `로컬 인덱스 [${warmed}]개 키워드 사전 로드 완료`);
+            log.info('WarmCache', `[${warmed}]개 키워드 Drive 캐시 워밍 완료`);
         }
     );
 }
