@@ -59,6 +59,10 @@ BooleanParser.prototype.parsePrimary = function() {
         if (this.peek() === ')') this.consume();
         return node;
     }
+    if (tok === 'AND' || tok === 'OR' || tok === 'NOT' || tok === ')') {
+        this.consume();
+        return { type: 'EMPTY' };
+    }
     this.consume();
     return { type: 'KEYWORD', value: tok };
 };
