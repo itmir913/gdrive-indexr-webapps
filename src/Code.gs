@@ -546,7 +546,7 @@ function tokenize(query) {
   if (!query) return [];
 
   // Step 2: 연산자·괄호 앞뒤에 구분자 삽입 후 분리
-  query = query.replace(/\s*(and|or|not)\s*/gi, '|||$1|||');
+  query = query.replace(/\s*\b(and|or|not)\b\s*/gi, '|||$1|||');
   query = query.replace(/\s*([()])\s*/g, '|||$1|||');
 
   // Step 3: 분리 → 공백 제거 → 빈 문자열 제거
