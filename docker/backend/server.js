@@ -207,20 +207,13 @@ function getCachedFileIds(keyword) {
 
 // ── 키워드 캐시 저장 ─────────────────────────────────────────────────────────
 function setCachedFileIds(keyword, fileIds) {
-    db.serialize(() => {
-        db.run('BEGIN TRANSACTION');
-        db.run(
-            'INSERT OR REPLACE INTO keyword_cache (keyword, fileIds, cachedAt) VALUES (?, ?, ?)',
-            [keyword, JSON.stringify(fileIds), Date.now()],
-            (err) => {
-                if (err) {
-                    db.run('ROLLBACK');
-                    return log.error('Cache', `캐시 저장 실패 [${keyword}]: ${err.message}`);
-                }
-                db.run('COMMIT');
-            }
-        );
-    });
+    db.run(
+        'INSERT OR REPLACE INTO keyword_cache (keyword, fileIds, cachedAt) VALUES (?, ?, ?)',
+        [keyword, JSON.stringify(fileIds), Date.now()],
+        (err) => {
+            if (err) log.error('Cache', `캐시 저장 실패 [${keyword}]: ${err.message}`);
+        }
+    );
 }
 
 // ── 키워드 → fileId 배열 (캐시 → Drive 검색 → 로컬 인덱스 합산) ──────────────
@@ -496,19 +489,15 @@ app.get('/api/health', (req, res) => {
 // ── 키워드 로그 ──────────────────────────────────────────────────────────────
 function logKeyword(keyword) {
     const today = new Date().toISOString().split('T')[0];
-    db.serialize(() => {
-        db.run('BEGIN TRANSACTION');
-        db.run(`
-            INSERT INTO keyword_log (keyword, count, lastSearchDay)
-            VALUES (?, 1, ?)
-            ON CONFLICT(keyword) DO UPDATE SET
-                count = count + 1,
-                lastSearchDay = ?
-        `, [keyword, today, today],
-        (err) => {
-            if (err) { db.run('ROLLBACK'); return log.error('Log', `키워드 로그 실패 [${keyword}]: ${err.message}`); }
-            db.run('COMMIT');
-        });
+    db.run(`
+        INSERT INTO keyword_log (keyword, count, lastSearchDay)
+        VALUES (?, 1, ?)
+        ON CONFLICT(keyword) DO UPDATE SET
+            count = count + 1,
+            lastSearchDay = ?
+    `, [keyword, today, today],
+    (err) => {
+        if (err) log.error('Log', `키워드 로그 실패 [${keyword}]: ${err.message}`);
     });
 }
 
@@ -517,16 +506,12 @@ function purgeStaleKeywords() {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - 3);
     const cutoffStr = cutoff.toISOString().split('T')[0];
-    db.serialize(() => {
-        db.run('BEGIN TRANSACTION');
-        db.run('DELETE FROM keyword_log WHERE lastSearchDay < ?', [cutoffStr],
-            function (err) {
-                if (err) { db.run('ROLLBACK'); return log.error('Purge', `키워드 정리 실패: ${err.message}`); }
-                log.info('Purge', `만료 키워드 [${this.changes}]개 삭제 완료`);
-                db.run('COMMIT');
-            }
-        );
-    });
+    db.run('DELETE FROM keyword_log WHERE lastSearchDay < ?', [cutoffStr],
+        function (err) {
+            if (err) return log.error('Purge', `키워드 정리 실패: ${err.message}`);
+            log.info('Purge', `만료 키워드 [${this.changes}]개 삭제 완료`);
+        }
+    );
 }
 
 // ── Warm Cache ───────────────────────────────────────────────────────────────
