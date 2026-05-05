@@ -311,7 +311,8 @@ function getNameMatchesFromSheet(keyword) {
 function driveFullTextSearch(keyword) {
   // Advanced Drive Service (Drive API v3) 필요
   // Apps Script 편집기 → 서비스 → Drive API v3 추가
-  const escaped = keyword.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  // [fix-B5] 큰따옴표도 이스케이프 추가 (이전: `"` 미처리로 Drive API 쿼리 malformed)
+  const escaped = keyword.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
   const q = `fullText contains '"${escaped}"' and trashed=false`;
   const opt = {
     q                    : q,

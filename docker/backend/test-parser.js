@@ -154,6 +154,36 @@ assert('존재하지 않는 키워드', search('없는키워드', files), []);
 assert('대소문자 무시', search('ANDROID', files), ['f6']);
 assert('빈 괄호 → 빈 결과', search('()', files), []);
 
+// ── 9. 추가 토크나이즈 검증 (부분 문자열 경계) ───────────────────────────────
+console.log('\n[9] 추가 토크나이즈 검증 — and/or/not 부분 포함 단어');
+
+assertTokens('standard — and 단어 중간',   'standard',   ['standard']);
+assertTokens('border — or 단어 중간',       'border',     ['border']);
+assertTokens('candidate — and 단어 중간',   'candidate',  ['candidate']);
+assertTokens('north — or 단어 중간',        'north',      ['north']);
+assertTokens('random — and 단어 중간',      'random',     ['random']);
+assertTokens('format — or 단어 중간',       'format',     ['format']);
+assertTokens('snorkel — or 단어 중간',      'snorkel',    ['snorkel']);
+
+// ── 10. 연속 연산자 / 트레일링 연산자 ───────────────────────────────────────
+console.log('\n[10] 연속 연산자 / 트레일링 연산자 동작 확인');
+
+// 연속 AND: AND(논술, EMPTY) → 빈 집합 ('면접' 토큰은 소비되지 않음)
+assertTokens('연속 AND 토크나이즈', '논술 AND AND 면접', ['논술', 'AND', 'AND', '면접']);
+assert('논술 AND AND 면접 → 빈 결과', search('논술 AND AND 면접', files), []);
+
+// 연속 OR: OR(논술, EMPTY) → 논술 결과만 ('면접' 토큰은 소비되지 않음)
+assertTokens('연속 OR 토크나이즈', '논술 OR OR 면접', ['논술', 'OR', 'OR', '면접']);
+assert('논술 OR OR 면접 → 논술 결과만', search('논술 OR OR 면접', files), ['f1', 'f3', 'f5']);
+
+// 트레일링 AND: AND(논술, EMPTY) → 빈 집합
+assertTokens('트레일링 AND 토크나이즈', '논술 AND', ['논술', 'AND']);
+assert('논술 AND → 빈 결과', search('논술 AND', files), []);
+
+// 트레일링 OR: OR(논술, EMPTY) → 논술 결과
+assertTokens('트레일링 OR 토크나이즈', '논술 OR', ['논술', 'OR']);
+assert('논술 OR → 논술 결과', search('논술 OR', files), ['f1', 'f3', 'f5']);
+
 // ── 결과 ─────────────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(50)}`);
 console.log(`총 ${passed + failed}개 | ✓ ${passed}개 통과 | ✗ ${failed}개 실패`);

@@ -487,15 +487,22 @@
     resultsDiv.innerHTML = header + `<div class="view-body">${body}</div>`;
   }
 
+  // [fix-F15] URL을 onclick 인라인 JS 문자열 대신 data-url 속성에 저장
+  //           escHtml은 '(단일따옴표)를 이스케이프하지 않아 JS 컨텍스트 탈출 가능했던 패턴 수정
+  function openResultUrl(el) {
+    const url = el.dataset.url;
+    if (url && url !== '#') window.open(url, '_blank', 'noopener');
+  }
+
   function renderCardView(results) {
     let html = '';
     results.forEach(function(item) {
       const tags = (item.path || '').split('/').filter(s => s.length > 0);
       const tagHtml = tags.map(t => '<span class="tag">' + escHtml(t) + '</span>').join('');
 
-      const safeUrl = (item.url && (item.url.startsWith('https:\/\/') || item.url.startsWith('http:\/\/'))) ? item.url : '#';
+      const safeUrl = (item.url && (item.url.startsWith('https://') || item.url.startsWith('http://'))) ? item.url : '#';
       html += `
-        <div class="result-item" onclick="window.open('${escHtml(safeUrl)}', '_blank', 'noopener')">
+        <div class="result-item" data-url="${escHtml(safeUrl)}" onclick="openResultUrl(this)">
           <div class="result-name">${escHtml(item.name)}</div>
           ${tagHtml ? `<div class="tag-row">${tagHtml}</div>` : ''}
         </div>`;
@@ -508,9 +515,9 @@
     results.forEach(function(item) {
       const tags = (item.path || '').split('/').filter(s => s.length > 0);
       const tagText = tags.join(' › ');
-      const safeUrl = (item.url && (item.url.startsWith('https:\/\/') || item.url.startsWith('http:\/\/'))) ? item.url : '#';
+      const safeUrl = (item.url && (item.url.startsWith('https://') || item.url.startsWith('http://'))) ? item.url : '#';
       rows += `
-        <tr class="result-row" onclick="window.open('${escHtml(safeUrl)}', '_blank', 'noopener')">
+        <tr class="result-row" data-url="${escHtml(safeUrl)}" onclick="openResultUrl(this)">
           <td class="td-name" data-tooltip="${escHtml(item.name)}"><span class="cell-text">${escHtml(item.name)}</span></td>
           <td class="td-tags"${tagText ? ` data-tooltip="${escHtml(tagText)}"` : ''}><span class="cell-text">${escHtml(tagText)}</span></td>
         </tr>`;

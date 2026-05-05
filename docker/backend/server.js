@@ -17,6 +17,7 @@ const ADMIN_PASSWORD    = process.env.ADMIN_PASSWORD;
 const OAUTH_REDIRECT_URI = process.env.OAUTH_REDIRECT_URI || 'http://localhost/oauth/callback';
 const PRECACHE_TOP_N    = 100;
 const CACHE_TTL_MS      = 6 * 60 * 60 * 1000;
+const WARM_CACHE_LIMIT_MS = 4 * 60 * 1000;
 const RETRY_COUNT       = 3;
 const RETRY_DELAY_MS    = 500;
 
@@ -36,10 +37,11 @@ const log = {
 };
 
 // ── DB 초기화 ────────────────────────────────────────────────────────────────
+// [fix-D] DDL에 트랜잭션 불필요 — serialize 큐 내 콜백에서 ROLLBACK이 COMMIT 이후 실행되는
+//         패턴 버그를 제거하고, 마지막 CREATE TABLE 콜백에서 resolve로 단순화
 function initDB() {
     return new Promise((resolve, reject) => {
         db.serialize(() => {
-            db.run('BEGIN TRANSACTION');
             db.run(`
                 CREATE TABLE IF NOT EXISTS file_index (
                     fileId     TEXT PRIMARY KEY,
@@ -48,23 +50,22 @@ function initDB() {
                     url        TEXT NOT NULL,
                     modifiedAt TEXT
                 )
-            `, (err) => { if (err) { db.run('ROLLBACK'); return reject(err); } });
+            `, (err) => { if (err) return reject(err); });
             db.run(`
                 CREATE TABLE IF NOT EXISTS keyword_log (
                     keyword       TEXT PRIMARY KEY,
                     count         INTEGER DEFAULT 1,
                     lastSearchDay TEXT
                 )
-            `, (err) => { if (err) { db.run('ROLLBACK'); return reject(err); } });
+            `, (err) => { if (err) return reject(err); });
             db.run(`
                 CREATE TABLE IF NOT EXISTS keyword_cache (
                     keyword  TEXT PRIMARY KEY,
                     fileIds  TEXT NOT NULL,
                     cachedAt INTEGER NOT NULL
                 )
-            `, (err) => { if (err) { db.run('ROLLBACK'); return reject(err); } });
-            db.run('COMMIT', (err) => {
-                if (err) { db.run('ROLLBACK'); return reject(err); }
+            `, (err) => {
+                if (err) return reject(err);
                 log.info('DB', '스키마 초기화 완료');
                 resolve();
             });
@@ -79,8 +80,9 @@ function isAuthenticated() {
         const token = JSON.parse(fs.readFileSync(TOKEN_PATH));
         // refresh_token이 있으면 만료돼도 자동 갱신 가능
         if (token.refresh_token) return true;
-        // refresh_token 없으면 expiry_date로 판단
-        if (token.expiry_date && token.expiry_date < Date.now()) return false;
+        // [fix-E14] expiry_date 없는 토큰은 만료로 간주 (이전: 무조건 true 반환)
+        if (!token.expiry_date) return false;
+        if (token.expiry_date < Date.now()) return false;
         return true;
     } catch {
         return false;
@@ -150,7 +152,8 @@ function loadIndexToMemory() {
 async function driveFullTextSearch(keyword) {
     if (!isAuthenticated()) return [];
     const drive = getDriveClient();
-    const escaped = keyword.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    // [fix-B5] 큰따옴표도 이스케이프 추가 (이전: `"` 미처리로 Drive API 쿼리 malformed)
+    const escaped = keyword.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
     const q = `fullText contains '"${escaped}"' and trashed=false`;
     const ids = [];
     let pageToken = null;
@@ -222,7 +225,8 @@ function setCachedFileIds(keyword, fileIds) {
 
 // ── 키워드 → fileId 배열 (캐시 → Drive 검색 → 로컬 인덱스 합산) ──────────────
 async function getFileIdsForKeyword(keyword) {
-    keyword = keyword.replace(/['"]/g, '');
+    // [fix-B6] toLowerCase 추가 — 직접 호출 시 대소문자 불일치로 캐시 미스 방지
+    keyword = keyword.replace(/['"]/g, '').toLowerCase();
     const cached = await getCachedFileIds(keyword);
     if (cached !== null) {
         log.info('Drive', `캐시 히트: [${keyword}] → [${cached.length}]건`);
@@ -329,8 +333,13 @@ async function rebuildMetadataIndex() {
         await new Promise((resolve, reject) => {
             db.serialize(() => {
                 db.run('BEGIN TRANSACTION');
-                db.run('DELETE FROM file_index');
-                db.run('DELETE FROM keyword_cache');
+                // [fix-C9] DELETE 실패 시 로그 남기도록 에러 콜백 추가
+                db.run('DELETE FROM file_index', (err) => {
+                    if (err) log.error('Index', `file_index 삭제 실패: ${err.message}`);
+                });
+                db.run('DELETE FROM keyword_cache', (err) => {
+                    if (err) log.error('Index', `keyword_cache 삭제 실패: ${err.message}`);
+                });
                 const stmt = db.prepare(
                     'INSERT OR REPLACE INTO file_index (fileId, name, path, url, modifiedAt) VALUES (?, ?, ?, ?, ?)'
                 );
@@ -364,10 +373,27 @@ function sha256(str) {
     return crypto.createHash('sha256').update(str, 'utf8').digest('hex');
 }
 
+// ── 비밀번호 검증 헬퍼 ───────────────────────────────────────────────────────
+// [fix-E12] ADMIN_PASSWORD 미설정 방어 + timingSafeEqual로 타이밍 공격 완화
+function verifyPassword(passwordHash) {
+    if (!ADMIN_PASSWORD) return false;
+    const serverHash = sha256(ADMIN_PASSWORD);
+    try {
+        const clientBuf = Buffer.from(String(passwordHash || ''), 'hex');
+        const serverBuf = Buffer.from(serverHash, 'hex');
+        // 길이가 다르면(hex가 아닌 입력 등) 즉시 false
+        if (clientBuf.length !== serverBuf.length) return false;
+        return crypto.timingSafeEqual(clientBuf, serverBuf);
+    } catch {
+        return false;
+    }
+}
+
 // ── OAuth 라우트 ─────────────────────────────────────────────────────────────
 app.post('/api/auth/initiate', (req, res) => {
     const { passwordHash } = req.body || {};
-    if (!passwordHash || passwordHash !== sha256(ADMIN_PASSWORD || '')) {
+    // [fix-E12] verifyPassword 헬퍼로 교체
+    if (!verifyPassword(passwordHash)) {
         log.warn('Admin', 'OAuth 시작 요청 — 비밀번호 불일치');
         return res.status(401).json({ error: '비밀번호가 올바르지 않습니다.' });
     }
@@ -413,6 +439,9 @@ app.get('/api/search', async (req, res) => {
         const tokens = tokenize(query);
         const tree = new BooleanParser(tokens).parse();
         const keywords = [...extractKeywords(tree)];
+        // [fix-F16] 키워드가 없는 쿼리(순수 연산자 등) 차단 — NOT(EMPTY)로 전체 파일 목록 노출 방지
+        if (keywords.length === 0) return res.json([]);
+
         const fileIdArrays = await Promise.all(keywords.map(kw => getFileIdsForKeyword(kw)));
 
         const keywordMap = new Map();
@@ -438,7 +467,8 @@ app.get('/api/search', async (req, res) => {
 // ── 어드민: 인덱스 재빌드 ────────────────────────────────────────────────────
 app.post('/api/rebuild', (req, res) => {
     const { passwordHash } = req.body || {};
-    if (!passwordHash || passwordHash !== sha256(ADMIN_PASSWORD || '')) {
+    // [fix-E12] verifyPassword 헬퍼로 교체
+    if (!verifyPassword(passwordHash)) {
         log.warn('Admin', '인덱스 재빌드 요청 — 비밀번호 불일치');
         return res.status(401).json({ error: '비밀번호가 올바르지 않습니다.' });
     }
@@ -506,8 +536,14 @@ function warmCache() {
         [PRECACHE_TOP_N],
         async (err, rows) => {
             if (err) return log.error('WarmCache', `키워드 조회 실패: ${err.message}`);
+            // [fix-B7] 시간 초과 보호 추가 (GAS와 동일하게 4분 제한)
+            const wStart = Date.now();
             let warmed = 0;
             for (const { keyword } of rows) {
+                if (Date.now() - wStart > WARM_CACHE_LIMIT_MS) {
+                    log.warn('WarmCache', '시간 초과로 캐시 워밍 조기 종료');
+                    break;
+                }
                 const tokens = tokenize(keyword);
                 const tree = new BooleanParser(tokens).parse();
                 const kws = [...extractKeywords(tree)];
