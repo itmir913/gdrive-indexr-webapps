@@ -182,7 +182,9 @@ function doSearch(query) {
   )];
   try { logKeywords(keywords); } catch (e) { Logger.log('logKeywords error: ' + e.message); }
 
-  const tree      = new BooleanParser(tokens).parse();
+  var bparser = new BooleanParser(tokens);
+  var tree    = bparser.parse();
+  if (bparser.pos < bparser.tokens.length) return [];
   const allIds    = getAllFileIds();
   const resultSet = evaluate(tree, allIds);
   if (resultSet.size === 0) return [];
@@ -648,8 +650,11 @@ BooleanParser.prototype.parsePrimary = function() {
   }
 
   // 연산자가 단독으로 나타나는 경우 (잘못된 입력): EMPTY 반환
-  if (tok === 'AND' || tok === 'OR' || tok === 'NOT' || tok === ')') {
+  if (tok === 'AND' || tok === 'OR' || tok === 'NOT') {
     this.consume();
+    return { type: 'EMPTY' };
+  }
+  if (tok === ')') {
     return { type: 'EMPTY' };
   }
 

@@ -27,6 +27,7 @@ const TOKEN_PATH       = '/app/data/token.json';
 const db = new sqlite3.Database('/app/data/database.sqlite');
 let fileIndexCache = new Map();
 let isIndexing = false;
+let isWarmingCache = false;
 
 // ── 로거 ─────────────────────────────────────────────────────────────────────
 const ts = () => new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Seoul' });
@@ -324,27 +325,31 @@ async function rebuildMetadataIndex() {
         }
 
         await new Promise((resolve, reject) => {
-            db.serialize(() => {
-                db.run('BEGIN TRANSACTION');
-                // [fix-C9] DELETE 실패 시 로그 남기도록 에러 콜백 추가
+            db.run('BEGIN TRANSACTION', (err) => {
+                if (err) return reject(err);
                 db.run('DELETE FROM file_index', (err) => {
-                    if (err) log.error('Index', `file_index 삭제 실패: ${err.message}`);
-                });
-                db.run('DELETE FROM keyword_cache', (err) => {
-                    if (err) log.error('Index', `keyword_cache 삭제 실패: ${err.message}`);
-                });
-                const stmt = db.prepare(
-                    'INSERT OR REPLACE INTO file_index (fileId, name, path, url, modifiedAt) VALUES (?, ?, ?, ?, ?)'
-                );
-                for (const row of fileRows) stmt.run(row);
-                stmt.finalize((err) => {
                     if (err) {
-                        db.run('ROLLBACK');
-                        return reject(err);
+                        log.error('Index', `file_index 삭제 실패: ${err.message}`);
+                        return db.run('ROLLBACK', () => reject(err));
                     }
-                    db.run('COMMIT', (err) => {
-                        if (err) { db.run('ROLLBACK'); return reject(err); }
-                        resolve();
+                    db.run('DELETE FROM keyword_cache', (err) => {
+                        if (err) {
+                            log.error('Index', `keyword_cache 삭제 실패: ${err.message}`);
+                            return db.run('ROLLBACK', () => reject(err));
+                        }
+                        const stmt = db.prepare(
+                            'INSERT OR REPLACE INTO file_index (fileId, name, path, url, modifiedAt) VALUES (?, ?, ?, ?, ?)'
+                        );
+                        for (const row of fileRows) stmt.run(row);
+                        stmt.finalize((err) => {
+                            if (err) {
+                                return db.run('ROLLBACK', () => reject(err));
+                            }
+                            db.run('COMMIT', (err) => {
+                                if (err) return db.run('ROLLBACK', () => reject(err));
+                                resolve();
+                            });
+                        });
                     });
                 });
             });
@@ -430,7 +435,11 @@ app.get('/api/search', async (req, res) => {
 
     try {
         const tokens = tokenize(query);
-        const tree = new BooleanParser(tokens).parse();
+        const parser = new BooleanParser(tokens);
+        const tree = parser.parse();
+        if (parser.pos < parser.tokens.length) {
+            return res.status(400).json({ error: '잘못된 검색식입니다. 괄호를 확인하세요.' });
+        }
         const keywords = [...extractKeywords(tree)];
         // [fix-F16] 키워드가 없는 쿼리(순수 연산자 등) 차단 — NOT(EMPTY)로 전체 파일 목록 노출 방지
         if (keywords.length === 0) return res.json([]);
@@ -516,32 +525,40 @@ function purgeStaleKeywords() {
 
 // ── Warm Cache ───────────────────────────────────────────────────────────────
 function warmCache() {
+    if (isWarmingCache) {
+        log.warn('WarmCache', '이미 실행 중, 건너뜀');
+        return;
+    }
+    isWarmingCache = true;
     db.all(
         'SELECT keyword FROM keyword_log ORDER BY count DESC, lastSearchDay DESC LIMIT ?',
         [PRECACHE_TOP_N],
         async (err, rows) => {
-            if (err) return log.error('WarmCache', `키워드 조회 실패: ${err.message}`);
-            // [fix-B7] 시간 초과 보호 추가 (GAS와 동일하게 4분 제한)
-            const wStart = Date.now();
-            let warmed = 0;
-            for (const { keyword } of rows) {
-                if (Date.now() - wStart > WARM_CACHE_LIMIT_MS) {
-                    log.warn('WarmCache', '시간 초과로 캐시 워밍 조기 종료');
-                    break;
+            try {
+                if (err) { log.error('WarmCache', `키워드 조회 실패: ${err.message}`); return; }
+                const wStart = Date.now();
+                let warmed = 0;
+                for (const { keyword } of rows) {
+                    if (Date.now() - wStart > WARM_CACHE_LIMIT_MS) {
+                        log.warn('WarmCache', '시간 초과로 캐시 워밍 조기 종료');
+                        break;
+                    }
+                    const tokens = tokenize(keyword);
+                    const tree = new BooleanParser(tokens).parse();
+                    const kws = [...extractKeywords(tree)];
+                    for (const kw of kws) {
+                        const cached = await getCachedFileIds(kw);
+                        if (cached !== null) continue;
+                        await getFileIdsForKeyword(kw).catch(e =>
+                            log.error('WarmCache', `워밍 실패 [${kw}]: ${e.message}`)
+                        );
+                    }
+                    warmed++;
                 }
-                const tokens = tokenize(keyword);
-                const tree = new BooleanParser(tokens).parse();
-                const kws = [...extractKeywords(tree)];
-                for (const kw of kws) {
-                    const cached = await getCachedFileIds(kw);
-                    if (cached !== null) continue;
-                    await getFileIdsForKeyword(kw).catch(e =>
-                        log.error('WarmCache', `워밍 실패 [${kw}]: ${e.message}`)
-                    );
-                }
-                warmed++;
+                log.info('WarmCache', `[${warmed}]개 키워드 Drive 캐시 워밍 완료`);
+            } finally {
+                isWarmingCache = false;
             }
-            log.info('WarmCache', `[${warmed}]개 키워드 Drive 캐시 워밍 완료`);
         }
     );
 }
