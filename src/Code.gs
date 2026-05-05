@@ -183,7 +183,8 @@ function doSearch(query) {
   try { logKeywords(keywords); } catch (e) { Logger.log('logKeywords error: ' + e.message); }
 
   const tree      = new BooleanParser(tokens).parse();
-  const resultSet = evaluate(tree);
+  const allIds    = getAllFileIds();
+  const resultSet = evaluate(tree, allIds);
   if (resultSet.size === 0) return [];
 
   return lookupMetadata([...resultSet]);
@@ -656,24 +657,24 @@ BooleanParser.prototype.parsePrimary = function() {
   return { type: 'KEYWORD', value: tok };
 };
 
-function evaluate(node) {
+function evaluate(node, allIds) {
   if (!node || node.type === 'EMPTY') return new Set();
 
   if (node.type === 'KEYWORD') {
     return new Set(getFileIdsForKeyword(node.value));
   }
   if (node.type === 'AND') {
-    var leftSet = evaluate(node.left);
+    var leftSet = evaluate(node.left, allIds);
     // 단축 평가: 왼쪽이 비면 오른쪽 API 호출 생략
     if (leftSet.size === 0) return new Set();
-    return intersect(leftSet, evaluate(node.right));
+    return intersect(leftSet, evaluate(node.right, allIds));
   }
   if (node.type === 'OR') {
-    return union(evaluate(node.left), evaluate(node.right));
+    return union(evaluate(node.left, allIds), evaluate(node.right, allIds));
   }
   if (node.type === 'NOT') {
-    var allIds = getAllFileIds();
-    var excludeSet = evaluate(node.operand);
+    if (!allIds) allIds = getAllFileIds();
+    var excludeSet = evaluate(node.operand, allIds);
     return difference(allIds, excludeSet);
   }
   return new Set();
