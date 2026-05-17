@@ -502,7 +502,7 @@
       const tags = (item.path || '').split('/').filter(s => s.length > 0);
       const tagHtml = tags.map(t => '<span class="tag">' + escHtml(t) + '</span>').join('');
 
-      const safeUrl = (item.url && (item.url.startsWith('https://') || item.url.startsWith('http://'))) ? item.url : '#';
+      const safeUrl = /^https?:\/\//i.test(item.url) ? item.url : '#';
       html += `
         <div class="result-item" data-url="${escHtml(safeUrl)}" onclick="openResultUrl(this)">
           <div class="result-name">${escHtml(item.name)}</div>
@@ -517,7 +517,7 @@
     results.forEach(function(item) {
       const tags = (item.path || '').split('/').filter(s => s.length > 0);
       const tagText = tags.join(' › ');
-      const safeUrl = (item.url && (item.url.startsWith('https://') || item.url.startsWith('http://'))) ? item.url : '#';
+      const safeUrl = /^https?:\/\//i.test(item.url) ? item.url : '#';
       rows += `
         <tr class="result-row" data-url="${escHtml(safeUrl)}" onclick="openResultUrl(this)">
           <td class="td-name" data-tooltip="${escHtml(item.name)}"><span class="cell-text">${escHtml(item.name)}</span></td>
@@ -603,7 +603,7 @@
     const CURRENT_VERSION = "v0.3.5";
     const versionEl = document.getElementById('app-version');
 
-    fetch(`https://api.github.com/repos/${REPO}/releases/latest`)
+    fetch(`https:\/\/api.github.com/repos/${REPO}/releases/latest`)
             .then(res => res.json())
             .then(data => {
               const cleanCurrent = CURRENT_VERSION.replace(/^v/, "");
