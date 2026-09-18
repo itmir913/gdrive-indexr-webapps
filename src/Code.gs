@@ -13,6 +13,11 @@ const REBUILD_FLAG_KEY    = 'REBUILD_STARTED_AT';  // 재빌드 중복 실행 �
 const REBUILD_FLAG_LOCK_MS = 10000;        // 플래그 test-and-set 동안만 잡는 짧은 잠금
 const REBUILD_STALE_MS    = 10 * 60 * 1000; // 이 시간이 지난 플래그는 비정상 종료로 보고 무시
 const ROOT_NAME_KEY       = 'ROOT_FOLDER_NAME'; // 색인 시점의 루트 폴더 이름 (경로 접두사 제거용)
+const MIN_KEYWORD_LENGTH  = 2;             // 서버측 최소 키워드 길이 (프론트 제한과 동일)
+// 검색식 오류 문구 — Docker search-pipeline.js와 반드시 같아야 한다 (대조 테스트가 검사)
+const ERR_QUERY           = '잘못된 검색식입니다. 괄호를 확인하세요.';
+const ERR_NEGATIVE_ONLY   = '제외(NOT) 조건만으로는 검색할 수 없습니다. 찾으려는 키워드를 함께 입력해 주세요.';
+const ERR_SHORT_KEYWORD   = '검색어는 두 글자 이상 입력해 주세요.';
 const DRIVE_SERVICE       = Drive;         // Apps Script 서비스 식별자 (편집기 → 서비스 → 식별자)
 
 // ── 메타데이터 인덱스 재빌드 (매일 02:00 트리거 / 시간 초과 방지 / 이어하기 지원) ───
@@ -215,21 +220,32 @@ function doSearch(query) {
   // [fix-13.6] 소비되지 않은 토큰이 남으면 잘못된 검색식이다. 빈 배열로 돌려주면
   //            프론트가 "검색 결과가 없습니다"로 표시해 교사가 오타를 눈치채지 못한다.
   if (bparser.pos < bparser.tokens.length) {
-    return { error: '잘못된 검색식입니다. 괄호를 확인하세요.' };
+    return { error: ERR_QUERY };
+  }
+
+  // [fix-13.B8] 순수 부정 질의는 전체 파일 목록을 반환한다 — F16 정책의 구멍이었다
+  if (_isPureNegative(tree)) {
+    return { error: ERR_NEGATIVE_ONLY };
   }
 
   // [fix-13.B7] AST 기준으로 키워드를 추출한다. 토큰 기준으로 뽑으면 파서가 EMPTY로
   //   소비한 토큰까지 세어 Docker(`extractKeywords`)와 갈라진다.
+  // 빈 문자열을 걸러내지 않는다 — 아래 최소 길이 검증이 오류로 알려야 한다.
+  // (거르면 `""` 질의가 F16 가드에 걸려 조용히 0건이 되고 Docker와 갈라진다)
   const keywords = [...new Set(
-    [..._extractKeywords(tree)]
-      .map(function(t) { return _normalizeKeyword(t); })
-      .filter(function(t) { return t; })
+    [..._extractKeywords(tree)].map(function(t) { return _normalizeKeyword(t); })
   )];
 
   // [fix-13.B7] 키워드가 없는 질의(`NOT` 단독 등) 차단. 이 가드가 없으면
   //   `NOT` → NOT(EMPTY) → difference(전체, 공집합) = 전체 파일 목록이 반환된다.
   //   11차의 F16이 Docker에만 적용돼 있었고, 프론트 가드만으로는 서버가 보호되지 않는다.
   if (keywords.length === 0) return [];
+
+  // [fix-13.B8] 최소 길이 검증. 프론트에만 있던 2글자 제한을 서버에도 둔다.
+  //   한 글자("0", "대")면 부분 문자열 매칭이 사실상 전 파일에 걸린다.
+  for (var ki = 0; ki < keywords.length; ki++) {
+    if (keywords[ki].length < MIN_KEYWORD_LENGTH) return { error: ERR_SHORT_KEYWORD };
+  }
 
   // [fix-13.13] 로깅은 검색식 검증을 통과한 뒤에만. 이전에는 오타 질의의 키워드가
   //             KeywordLog에 들어가 warmCache가 그것으로 Drive를 검색했다.
@@ -347,6 +363,19 @@ function _normKey(s) {
 // 캐시 키·KeywordLog·검색이 모두 같은 형태를 쓰도록 단일 함수로 관리
 function _normalizeKeyword(kw) {
   return _normKey(kw).replace(/['"]/g, '').trim();
+}
+
+// [fix-13.B8] 순수 부정 질의 판정 — Docker의 `isPureNegative`와 동일한 규칙.
+//   NOT은 여집합을 만든다. AND는 한쪽이라도 양성이면 좁혀지므로 안전하고,
+//   OR은 한쪽이라도 음성이면 넓어지므로 위험하다. EMPTY는 공집합이라 확장하지 않는다.
+//   → `논술 NOT 면접` 통과 / `NOT 면접`, `NOT A OR B` 차단
+function _isPureNegative(node) {
+  if (!node || node.type === 'EMPTY') return false;
+  if (node.type === 'KEYWORD') return false;
+  if (node.type === 'NOT') return true;
+  if (node.type === 'AND') return _isPureNegative(node.left) && _isPureNegative(node.right);
+  if (node.type === 'OR')  return _isPureNegative(node.left) || _isPureNegative(node.right);
+  return false;
 }
 
 // [fix-13.B7] AST에서 키워드 추출 — Docker의 search-pipeline.js `extractKeywords`와 동일
