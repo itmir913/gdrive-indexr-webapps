@@ -422,11 +422,16 @@ function getFileIdsForKeyword(keyword) {
   const cached = _getChunkedCache(cache, baseKey);
   if (cached !== null) return cached;
 
-  const driveIds = driveFullTextSearch(keyword);      // 1. 드라이브 전체 텍스트 검색 (내용 중심)
+  const drive    = driveFullTextSearch(keyword);      // 1. 드라이브 전체 텍스트 검색 (내용 중심)
   const sheetIds = getNameMatchesFromSheet(keyword);  // 2. 스프레드시트 인덱스에서 파일명 검색 (파일명 중심)
-  const combinedIds = [...new Set([...driveIds, ...sheetIds])];  // 3. 두 결과 합치기 (중복 제거)
+  const combinedIds = [...new Set([...drive.ids, ...sheetIds])];  // 3. 두 결과 합치기 (중복 제거)
 
-  _putChunkedCache(cache, baseKey, combinedIds, CACHE_TTL);
+  // [fix-13.B9] 불완전한 Drive 결과는 캐싱하지 않는다 (이번 요청에는 가진 만큼 돌려준다)
+  if (drive.complete) {
+    _putChunkedCache(cache, baseKey, combinedIds, CACHE_TTL);
+  } else {
+    Logger.log('Drive 결과 불완전 — 캐시 저장 생략 [' + keyword + ']');
+  }
   return combinedIds;
 }
 
@@ -460,7 +465,11 @@ function driveFullTextSearch(keyword) {
     includeItemsFromAllDrives: true,
   };
 
+  // [fix-13.B9] 중간 페이지에서 실패하면 지금까지 모은 결과를 그대로 돌려주되,
+  //   complete=false로 알린다. 부분 결과를 캐싱하면 일시적 장애가 6시간 고착되고
+  //   교사는 줄어든 결과를 보고 "자료가 없다"고 판단한다.
   const ids = [];
+  let complete = true;
   try {
     let response = DRIVE_SERVICE.Files.list(opt);
     while (true) {
@@ -470,9 +479,10 @@ function driveFullTextSearch(keyword) {
       response = DRIVE_SERVICE.Files.list(opt);
     }
   } catch (err) {
+    complete = false;
     Logger.log('driveFullTextSearch error [' + keyword + ']: ' + err.message);
   }
-  return ids;
+  return { ids: ids, complete: complete };
 }
 
 // ── fileId 배열 → 메타데이터 조회 (메모리 캐싱 적용) ──────────────────────────────────
@@ -621,10 +631,9 @@ function warmCache() {
     const baseKey = 'kw_' + kw;
     if (_getChunkedCache(cache, baseKey) !== null) continue; // 캐시 히트 → skip
 
-    const driveIds = driveFullTextSearch(kw);
-    const sheetIds = getNameMatchesFromSheet(kw);
-    const ids = [...new Set([...driveIds, ...sheetIds])];
-    _putChunkedCache(cache, baseKey, ids, CACHE_TTL);
+    // [fix-13.B9] 해결 경로 사본을 두지 않는다. getFileIdsForKeyword가 캐시 저장
+    //   여부(Drive 완전성)까지 판단하므로 워밍도 같은 규칙을 따른다. Docker와 동일 구조.
+    getFileIdsForKeyword(kw);
     warmed++;
     Utilities.sleep(200);
   }

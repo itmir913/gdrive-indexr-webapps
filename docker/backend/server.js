@@ -211,8 +211,10 @@ async function loadIndexToMemory() {
 }
 
 // ── Drive 전체 텍스트 검색 ───────────────────────────────────────────────────
+// [fix-13.B9] 반환값에 complete를 함께 싣는다. 실패했거나 미인증이라 Drive 결과가
+//   비어 있는 응답을 캐싱하면 일시적 장애가 6시간 고착된다.
 async function driveFullTextSearch(keyword) {
-    if (!isAuthenticated()) return [];
+    if (!isAuthenticated()) return { ids: [], complete: false };
     consumeDriveBudget();   // [fix-13.B6] 실제 Drive 호출만 예산을 소비한다
     const drive = getDriveClient();
     // [fix-B5] 큰따옴표도 이스케이프 추가 (이전: `"` 미처리로 Drive API 쿼리 malformed)
@@ -237,7 +239,7 @@ async function driveFullTextSearch(keyword) {
     } while (pageToken);
 
     log.info('Drive', `드라이브 검색: [${keyword}] → [${ids.length}]건`);
-    return ids;
+    return { ids, complete: true };
 }
 
 // ── 로컬 인덱스에서 파일명/하위 폴더 경로 검색 ────────────────────────────────
@@ -290,20 +292,25 @@ async function getFileIdsForKeyword(keyword) {
     // [fix-13.9] Drive 응답을 기다리는 사이 인덱스가 교체되면 이 결과는 옛 인덱스 기준이다
     const generationAtStart = indexGeneration;
 
-    const [driveIds, nameIds] = await Promise.all([
+    const [drive, nameIds] = await Promise.all([
         driveFullTextSearch(keyword).catch(e => {
             noteDriveError(`검색 실패 [${keyword}]: ${e.message}`);
             log.error('Drive', `검색 실패 [${keyword}]: ${e.message}`);
-            return [];
+            return { ids: [], complete: false };
         }),
         Promise.resolve(getNameMatches(keyword)),
     ]);
 
-    const combined = [...new Set([...driveIds, ...nameIds])];
-    if (indexGeneration === generationAtStart) {
-        setCachedFileIds(keyword, combined);
-    } else {
+    const combined = [...new Set([...drive.ids, ...nameIds])];
+    // [fix-13.B9] 이번 요청에는 가진 만큼 돌려주되, 불완전한 결과는 캐싱하지 않는다.
+    //   캐싱하면 네트워크 순단·쿼터 403 한 번이 그 키워드를 6시간 동안 이름 검색만
+    //   되는 상태로 고정시키고, 교사는 "자료가 없다"고 판단하게 된다.
+    if (!drive.complete) {
+        log.warn('Cache', `Drive 결과 불완전 — 캐시 저장 생략 [${keyword}]`);
+    } else if (indexGeneration !== generationAtStart) {
         log.warn('Cache', `인덱스 교체로 캐시 저장 생략 [${keyword}]`);
+    } else {
+        setCachedFileIds(keyword, combined);
     }
     return combined;
 }

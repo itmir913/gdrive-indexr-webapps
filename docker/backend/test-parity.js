@@ -112,7 +112,8 @@ function loadGas(CORPUS, ROOT) {
     vm.runInContext(fs.readFileSync(CODE_GS, 'utf8'), ctx);
 
     // 외부 호출만 대체한다. 매칭·정규화·파싱·집합연산은 전부 진짜가 돈다.
-    ctx.driveFullTextSearch = () => [];
+    // [fix-13.B9] 실제 반환 형태({ids, complete})를 그대로 흉내낸다
+    ctx.driveFullTextSearch = () => ({ ids: [], complete: true });
     ctx.logKeywords = (kws) => { ctx.__logged.push(...kws); };
     ctx.__logged = [];
     return ctx;
