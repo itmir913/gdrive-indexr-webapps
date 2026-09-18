@@ -196,7 +196,10 @@ function _rebuildMetadataIndexImpl() {
       }
       // 1분 뒤 이어하기 트리거 생성
       ScriptApp.newTrigger('continueIndexing').timeBased().after(60 * 1000).create();
-      Logger.log(`[시간 초과 방지] 남은 폴더: ${folderQueue.length}개. 1분 뒤 이어하기 실행.`);
+      // 대기열 크기를 함께 남긴다 — 속성 저장 한도에 얼마나 근접했는지 운영 중 확인용
+      Logger.log(`[시간 초과 방지] 남은 폴더: ${folderQueue.length}개 ` +
+                 `(대기열 ${JSON.stringify(folderQueue).length}자, 한도 ${QUEUE_MAX_CHARS}자). ` +
+                 `1분 뒤 이어하기 실행.`);
       return 'in_progress';
     }
 
