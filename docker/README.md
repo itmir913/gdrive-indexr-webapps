@@ -129,10 +129,6 @@ TZ=Asia/Seoul
 > 쓰고 크론에도 같은 값을 명시하므로, **아무것도 설정하지 않아도 한국 시간으로 돕니다.**
 > 다른 시간대로 바꾸려면 위 `.env` 의 `TZ` 만 고치면 됩니다 — `docker-compose.yml` 은
 > 건드릴 필요가 없습니다.
->
-> 서버의 `docker-compose.yml` 을 포트·SSL 때문에 수정해 두었다면, `git pull` 충돌을
-> 피하기 위해 그 수정을 `docker-compose.override.yml` 로 옮기는 것을 권합니다.
-> Compose가 자동으로 병합하며 저장소 파일은 건드리지 않습니다.
 
 ### 4단계 — 빌드 및 실행
 
