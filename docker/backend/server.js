@@ -230,7 +230,7 @@ async function loadIndexToMemory() {
 // ── Drive 전체 텍스트 검색 ───────────────────────────────────────────────────
 // [fix-13.B9] 반환값에 complete를 함께 싣는다. 실패했거나 미인증이라 Drive 결과가
 //   비어 있는 응답을 캐싱하면 일시적 장애가 6시간 고착된다.
-async function driveFullTextSearch(keyword) {
+async function driveFullTextSearch(keyword, forWarming) {
     if (!isAuthenticated()) return { ids: [], complete: false };
     const drive = getDriveClient();
     // [fix-B5] 큰따옴표도 이스케이프 추가 (이전: `"` 미처리로 Drive API 쿼리 malformed)
@@ -251,7 +251,7 @@ async function driveFullTextSearch(keyword) {
 
         // [fix-13.C3] 페이지마다 소비한다. 함수 1회당 1로 세면 페이지네이션이
         //   많은 키워드에서 실제 Drive 호출 수를 크게 과소평가한다.
-        consumeDriveBudget();
+        consumeDriveBudget(forWarming);
         const response = await withRetry(() => drive.files.list(params));
         (response.data.files || []).forEach(f => ids.push(f.id));
         pageToken = response.data.nextPageToken || null;
@@ -294,7 +294,7 @@ function setCachedFileIds(keyword, fileIds) {
 }
 
 // ── 키워드 → fileId 배열 (캐시 → Drive 검색 → 로컬 인덱스 합산) ──────────────
-async function getFileIdsForKeyword(keyword) {
+async function getFileIdsForKeyword(keyword, forWarming) {
     // [fix-B6] toLowerCase 추가 — 직접 호출 시 대소문자 불일치로 캐시 미스 방지
     // [fix-13.11] 색인 측과 같은 NFC 정규화를 적용
     keyword = normalizeKeyword(keyword);
@@ -318,8 +318,15 @@ async function getFileIdsForKeyword(keyword) {
     const indexAtStart = searchIndex;
 
     const [drive, nameIds] = await Promise.all([
-        driveFullTextSearch(keyword).catch(e => {
-            noteDriveError(`검색 실패 [${keyword}]: ${e.message}`);
+        driveFullTextSearch(keyword, forWarming).catch(e => {
+            // [fix-13.E2] lastDriveError는 무인증 /api/health로 나간다. 검색어를 담으면
+            //   장애 중 누군가 검색한 문구가 공개된다(PRIVACY.md는 키워드 익명 보관을 약속).
+            //   서버 로그에는 키워드를 남기되 공개 필드에는 넣지 않는다.
+            // [fix-13.E4] invalid_grant는 withRetry가 이미 "다시 로그인하세요"를 기록했다.
+            //   여기서 덮으면 관리자가 볼 문구가 원문 오류로 바뀐다.
+            if (e.response?.data?.error !== 'invalid_grant') {
+                noteDriveError(`키워드 검색 중 Drive 오류: ${e.message}`);
+            }
             log.error('Drive', `검색 실패 [${keyword}]: ${e.message}`);
             return { ids: [], complete: false };
         }),
@@ -567,19 +574,24 @@ app.get('/oauth/callback', async (req, res) => {
 // ── Drive 호출 예산 ──────────────────────────────────────────────────────────
 let driveWindowStart = Date.now();
 let driveWindowCalls = 0;
+// [fix-13.E3] 워밍이 쓴 몫을 따로 센다. 전체 사용량으로 판정하면 "50% 상한"이 아니라
+//   "전체가 50% 미만일 때만 워밍"이 되어, 교사들이 먼저 쓴 날엔 워밍이 한 건도 못 한다.
+let driveWindowWarmCalls = 0;
 
 function rollDriveWindow() {
     const now = Date.now();
     if (now - driveWindowStart > DRIVE_BUDGET_WINDOW_MS) {
         driveWindowStart = now;
         driveWindowCalls = 0;
+        driveWindowWarmCalls = 0;
     }
 }
 
 /** Drive 호출 1건 소비 — driveFullTextSearch에서만 부른다 */
-function consumeDriveBudget() {
+function consumeDriveBudget(forWarming) {
     rollDriveWindow();
     driveWindowCalls++;
+    if (forWarming) driveWindowWarmCalls++;
 }
 
 /** 이번 창의 예산이 소진됐는가 */
@@ -588,10 +600,12 @@ function driveBudgetExhausted() {
     return driveWindowCalls >= DRIVE_CALL_BUDGET;
 }
 
-/** [fix-13.D5] 워밍이 계속해도 되는가 — 사용자 몫을 남겨 둔다 */
+/** [fix-13.D5][fix-13.E3] 워밍이 계속해도 되는가 — 워밍 자신의 몫만 본다.
+ *  전체 상한(driveBudgetExhausted)은 그대로 적용되므로 총합은 여전히 예산 안이다. */
 function warmBudgetAvailable() {
     rollDriveWindow();
-    return driveWindowCalls < DRIVE_CALL_BUDGET * WARM_BUDGET_SHARE;
+    return driveWindowWarmCalls < DRIVE_CALL_BUDGET * WARM_BUDGET_SHARE
+        && driveWindowCalls < DRIVE_CALL_BUDGET;
 }
 
 // [fix-13.C3] 예산 초과는 '캐시 미스라 Drive가 필요한' 시점에만 판정한다.
@@ -732,7 +746,7 @@ function warmCache() {
                         if (!norm) continue;
                         const cached = await getCachedFileIds(norm);
                         if (cached !== null) continue;
-                        await getFileIdsForKeyword(norm).catch(e =>
+                        await getFileIdsForKeyword(norm, true).catch(e =>
                             log.error('WarmCache', `워밍 실패 [${norm}]: ${e.message}`)
                         );
                     }

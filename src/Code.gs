@@ -308,6 +308,14 @@ function _rebuildMetadataIndexImpl() {
     Logger.log('키워드 캐시 무효화 오류: ' + e.message);
   }
 
+  // [fix-13.E5] 캐시 무효화까지 마친 뒤에 실패를 보고한다
+  if (failed) {
+    const note = hadError || '탐색 결과 0건 (FOLDER_ID·폴더 접근 권한 확인 필요)';
+    Logger.log('[재빌드] 인덱스가 불완전합니다: ' + note);
+    _rebuildFailureNote = note;
+    return 'error';
+  }
+
   Logger.log('🎉 인덱싱 완료!');
   return 'done';
 }
