@@ -6,10 +6,9 @@ const { google } = require('googleapis');
 const sqlite3 = require('sqlite3').verbose();
 const cron = require('node-cron');
 const crypto = require('crypto');
-const { runSearch } = require('./search-pipeline');
+const { runSearch, extractKeywords } = require('./search-pipeline');
 const { normalizeKeyword, buildSearchIndex, matchKeyword } = require('./search-keys');
 const { tokenize, BooleanParser } = require('./parser');
-const { extractKeywords } = require('./search-pipeline');
 
 const app = express();
 app.use(express.json());

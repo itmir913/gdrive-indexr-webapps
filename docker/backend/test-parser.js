@@ -222,6 +222,41 @@ const coercedFiles = new Map([
 assert('숫자 파일명 매칭 (TypeError 없이)', search('2027', coercedFiles), ['c1']);
 assert('null 경로에서도 안전', search('서울대', coercedFiles), ['c1']);
 
+// ── 12. isPureNegative 진리표 ────────────────────────────────────────────────
+// 전체 목록 노출을 막는 술어라 end-to-end뿐 아니라 직접 검증한다.
+console.log('\n[12] isPureNegative 진리표 (순수 부정 질의 차단)');
+{
+    const { isPureNegative, QUERY_ERROR, NEGATIVE_ONLY, SHORT_KEYWORD,
+            MIN_KEYWORD_LENGTH } = require('./search-pipeline');
+    const pn = (q) => isPureNegative(new BooleanParser(tokenize(q)).parse());
+    const expect = (q, want) => assert(
+        `${JSON.stringify(q)} → ${want ? '차단' : '허용'}`, [pn(q)], [want]);
+
+    // 차단돼야 하는 것 — 여집합이 최상위로 새어나온다
+    expect('NOT 논술', true);
+    expect('NOT', true);
+    expect('NOT (논술 AND 면접)', true);
+    expect('NOT 논술 OR 면접', true);          // OR 아래 음성 가지 하나면 넓어진다
+    expect('면접 OR NOT 논술', true);
+    expect('NOT 논술 AND NOT 면접', true);     // 양쪽 다 음성
+    expect('NOT NOT NOT 논술', true);          // 삼중 부정 = 음성
+
+    // 허용돼야 하는 것
+    expect('논술', false);
+    expect('논술 NOT 면접', false);            // AND 한쪽이 양성이면 좁혀진다
+    expect('NOT 논술 AND 면접', false);
+    expect('(논술 OR 면접) NOT 서울대', false);
+    expect('NOT NOT 논술', false);             // 이중 부정 = 양성
+    expect('', false);
+    expect('()', false);
+
+    // 오류 문구 상수는 Code.gs와 같아야 한다 (대조 테스트가 런타임 일치를 검사)
+    assert('MIN_KEYWORD_LENGTH', [MIN_KEYWORD_LENGTH], [2]);
+    assert('오류 문구 3종 정의됨',
+           [[QUERY_ERROR, NEGATIVE_ONLY, SHORT_KEYWORD].every(x => typeof x === 'string' && x)],
+           [true]);
+}
+
 // ── 결과 ─────────────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(50)}`);
 console.log(`총 ${passed + failed}개 | ✓ ${passed}개 통과 | ✗ ${failed}개 실패`);
