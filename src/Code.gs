@@ -9,19 +9,39 @@ const KEYWORD_LOG_SHEET   = 'KeywordLog';  // 키워드 빈도 로그 시트 이
 const CACHE_TTL           = 21600;         // 6시간 (Google 하드 리밋)
 const CACHE_CHUNK_SIZE    = 30000;         // 청크 크기 (한글 3바이트 × 30000 = 90KB < 100KB 제한)
 const PRECACHE_TOP_N      = 100;           // warmCache 사전 워밍 대상 상위 N개; 나머지는 첫 검색 시 온디맨드 캐싱
+const REBUILD_FLAG_KEY    = 'REBUILD_STARTED_AT';  // 재빌드 중복 실행 방지 플래그 (ScriptProperties)
+const REBUILD_FLAG_LOCK_MS = 10000;        // 플래그 test-and-set 동안만 잡는 짧은 잠금
+const REBUILD_STALE_MS    = 10 * 60 * 1000; // 이 시간이 지난 플래그는 비정상 종료로 보고 무시
 const DRIVE_SERVICE       = Drive;         // Apps Script 서비스 식별자 (편집기 → 서비스 → 식별자)
 
 // ── 메타데이터 인덱스 재빌드 (매일 02:00 트리거 / 시간 초과 방지 / 이어하기 지원) ───
 function rebuildMetadataIndex() {
-  const lock = LockService.getScriptLock();
-  if (!lock.tryLock(0)) {
-    Logger.log('[rebuildMetadataIndex] 다른 인스턴스 실행 중, 건너뜀');
+  // [fix-13.7][fix-13.8] 예전에는 스크립트 락을 재빌드 4분 내내 쥐고 있었다. 그 결과
+  //   - logKeywords(waitLock 5000)가 그 창에서 반드시 실패해 KeywordLog에 기록되지 않았고,
+  //     그 키워드의 캐시는 완료 시 무효화 목록(KeywordLog 기반)에서 빠져 6시간 살아남았다.
+  //   - continueIndexing이 다른 락 보유자와 부딪히면 tryLock(0)에 막혀 그대로 끝났다.
+  //   락은 플래그 test-and-set 동안만 짧게 잡고, 상호배제는 플래그가 담당한다.
+  const props = PropertiesService.getScriptProperties();
+  const lock  = LockService.getScriptLock();
+  if (!lock.tryLock(REBUILD_FLAG_LOCK_MS)) {
+    Logger.log('[rebuildMetadataIndex] 플래그 확인용 잠금 실패, 건너뜀');
     return 'skipped';
   }
   try {
+    const startedAt = parseInt(props.getProperty(REBUILD_FLAG_KEY), 10) || 0;
+    if (startedAt && (Date.now() - startedAt) < REBUILD_STALE_MS) {
+      Logger.log('[rebuildMetadataIndex] 다른 인스턴스 실행 중, 건너뜀');
+      return 'skipped';
+    }
+    props.setProperty(REBUILD_FLAG_KEY, String(Date.now()));
+  } finally {
+    lock.releaseLock();   // 긴 탐색 전에 반드시 해제
+  }
+
+  try {
     return _rebuildMetadataIndexImpl();
   } finally {
-    lock.releaseLock();
+    PropertiesService.getScriptProperties().deleteProperty(REBUILD_FLAG_KEY);
   }
 }
 
@@ -45,6 +65,18 @@ function setupTriggers() {
 function doGet(e) {
   return HtmlService.createHtmlOutputFromFile('index')
     .setTitle('대입진학자료 통합검색기');
+}
+
+// ── FileIndex 행 추가 ───────────────────────────────────────────────────────
+// [fix-13.5] setValues는 셀 입력처럼 파싱되므로 "2027"은 숫자로, "2026.03.01"은
+//            날짜로 저장된다. 쓰기 직전 그 범위를 일반 텍스트(@)로 고정해
+//            파일명·경로가 원본 문자열 그대로 보존되게 한다.
+//            (시트 전체가 아니라 실제 쓰는 범위에 걸어야 자동 확장된 행까지 덮는다)
+function _appendIndexRows(sheet, rows) {
+  if (!rows || rows.length === 0) return;
+  const range = sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 5);
+  range.setNumberFormat('@');
+  range.setValues(rows);
 }
 
 function _rebuildMetadataIndexImpl() {
@@ -85,7 +117,7 @@ function _rebuildMetadataIndexImpl() {
     if (Date.now() - startTime > MAX_EXECUTION_TIME) {
       props.setProperty('FOLDER_QUEUE', JSON.stringify({ queue: folderQueue, ts: Date.now() })); // 남은 폴더 저장
       if (rows.length > 0) {
-        sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 5).setValues(rows);
+        _appendIndexRows(sheet, rows);
       }
       // 1분 뒤 이어하기 트리거 생성
       ScriptApp.newTrigger('continueIndexing').timeBased().after(60 * 1000).create();
@@ -108,7 +140,7 @@ function _rebuildMetadataIndexImpl() {
         ]);
 
         if (rows.length >= 500) {
-          sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 5).setValues(rows);
+          _appendIndexRows(sheet, rows);
           rows = [];
         }
       }
@@ -124,7 +156,7 @@ function _rebuildMetadataIndexImpl() {
 
   // 3. 탐색 완료
   if (rows.length > 0) {
-    sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 5).setValues(rows);
+    _appendIndexRows(sheet, rows);
   }
   props.deleteProperty('FOLDER_QUEUE');
   deleteTempTriggers();
@@ -141,7 +173,7 @@ function _rebuildMetadataIndexImpl() {
       if (kwLastRow >= 2) {
         const kwData = kwSheet.getRange(2, 1, kwLastRow - 1, 1).getValues();
         const nKeys = kwData
-          .map(r => String(r[0] ?? '').toLowerCase().trim())
+          .map(r => _normalizeKeyword(r[0]))   // 캐시 키와 동일 정규화
           .filter(kw => kw)
           .map(kw => 'kw_' + kw + '_n');
 
@@ -175,16 +207,25 @@ function doSearch(query) {
 
   const tokens = tokenize(query);
 
-  // 로깅용 키워드 추출 (연산자·괄호 제외, 중복 제거)
+  var bparser = new BooleanParser(tokens);
+  var tree    = bparser.parse();
+  // [fix-13.6] 소비되지 않은 토큰이 남으면 잘못된 검색식이다. 빈 배열로 돌려주면
+  //            프론트가 "검색 결과가 없습니다"로 표시해 교사가 오타를 눈치채지 못한다.
+  if (bparser.pos < bparser.tokens.length) {
+    return { error: '잘못된 검색식입니다. 괄호를 확인하세요.' };
+  }
+
+  // [fix-13.13] 로깅은 검색식 검증을 통과한 뒤에만. 이전에는 오타 질의의 키워드가
+  //             KeywordLog에 들어가 warmCache가 그것으로 Drive를 검색했다.
+  // 로깅용 키워드 추출 (연산자·괄호 제외, 중복 제거, 캐시 키와 동일 정규화)
   const OPERATORS = { AND: true, OR: true, NOT: true, '(': true, ')': true };
   const keywords = [...new Set(
     tokens.filter(function(t) { return !OPERATORS[t]; })
+         .map(function(t) { return _normalizeKeyword(t); })
+         .filter(function(t) { return t; })
   )];
   try { logKeywords(keywords); } catch (e) { Logger.log('logKeywords error: ' + e.message); }
 
-  var bparser = new BooleanParser(tokens);
-  var tree    = bparser.parse();
-  if (bparser.pos < bparser.tokens.length) return [];
   const allIds    = getAllFileIds();
   const resultSet = evaluate(tree, allIds);
   if (resultSet.size === 0) return [];
@@ -226,7 +267,10 @@ function logKeywords(keywords) {
         const count = (parseInt(sheet.getRange(r, 2).getValue(), 10) || 0) + 1;
         sheet.getRange(r, 2, 1, 2).setValues([[count, today]]);
       } else {
-        sheet.appendRow([kw, 1, today]);
+        // [fix-13.5] "3-1" 같은 키워드가 날짜로 저장되지 않도록 쓰기 전 A열을 텍스트로 고정
+        const newRow = sheet.getLastRow() + 1;
+        sheet.getRange(newRow, 1).setNumberFormat('@');
+        sheet.getRange(newRow, 1, 1, 3).setValues([[kw, 1, today]]);
       }
     });
   } finally {
@@ -284,9 +328,32 @@ function _getChunkedCache(cache, baseKey) {
   try { return JSON.parse(json); } catch (e) { return null; }
 }
 
+// ── 검색 키 정규화 ──────────────────────────────────────────────────────────
+// [fix-13.5]  시트는 "2027", "3-1" 같은 값을 Number/Date로 돌려주므로 String()으로 감싼다.
+// [fix-13.11] macOS 업로드 파일명은 한글이 NFD라 NFC 검색어와 코드 포인트가 다르다.
+function _normKey(s) {
+  return String(s == null ? '' : s).normalize('NFC').toLowerCase();
+}
+
+// 캐시 키·KeywordLog·검색이 모두 같은 형태를 쓰도록 단일 함수로 관리
+function _normalizeKeyword(kw) {
+  return _normKey(kw).replace(/['"]/g, '').trim();
+}
+
+// [fix-13.2] 모든 폴더경로는 루트 폴더 이름으로 시작하므로 그대로 매칭하면 루트 이름의
+//            부분 문자열이 전 파일에 걸린다. 첫 세그먼트(루트)를 떼고 하위 경로만 남긴다.
+function _toSearchPath(path) {
+  const s = String(path == null ? '' : path);
+  const i = s.indexOf('/');
+  return i === -1 ? '' : s.slice(i + 1);
+}
+
 // ── 키워드 → fileId 배열 (캐시 우선) ────────────────────────────────────────
 function getFileIdsForKeyword(keyword) {
-  keyword = keyword.replace(/['"]/g, '').toLowerCase().trim();
+  keyword = _normalizeKeyword(keyword);
+  // [fix-13.10] 따옴표만으로 이뤄진 질의(`""`)는 여기서 빈 문자열이 되고,
+  //             그대로 두면 includes('')가 전 파일에 걸려 전체 목록이 노출된다.
+  if (!keyword) return [];
   const baseKey = 'kw_' + keyword;
   const cache = CacheService.getScriptCache();
 
@@ -303,9 +370,15 @@ function getFileIdsForKeyword(keyword) {
 
 // ── 시트 인덱스에서 파일명으로 ID를 찾아주는 헬퍼 함수 ──────────────────
 function getNameMatchesFromSheet(keyword) {
+  if (!keyword) return [];   // [fix-13.10] 빈 키워드는 includes('')로 전건 매칭된다
   const map = getCachedMetadataMap();
+  // [fix-13.2]  파일명 + 하위 폴더 경로(루트 폴더명 제외)를 매칭 — Docker판과 동일 기준
+  // [fix-13.5]  meta.name이 Number/Date일 수 있어 _normKey가 String()으로 감싼다
+  // [fix-13.11] 색인 측과 질의 측 모두 NFC로 정규화
   return Object.entries(map)
-    .filter(([, meta]) => (meta.name || '').toLowerCase().includes(keyword))
+    .filter(([, meta]) =>
+      _normKey(meta.name).includes(keyword) ||
+      _normKey(_toSearchPath(meta.path)).includes(keyword))
     .map(([id]) => id);
 }
 
@@ -397,7 +470,14 @@ function getCachedMetadataMap() {
   if (lastRow >= 2) {
     const data = sheet.getRange(2, 1, lastRow - 1, 5).getValues();
     data.forEach(row => {
-      if (row[0]) map[row[0]] = { name: row[1], path: row[2], url: row[3] };
+      // [fix-13.5] 시트 서식이 무너진 기존 데이터를 대비한 방어.
+      //            "2027"·"2026.03.01"·"TRUE" 같은 값은 Number/Date/Boolean으로 돌아오며,
+      //            여기서 문자열로 고정하지 않으면 하류의 toLowerCase()가 TypeError를 던진다.
+      if (row[0]) map[String(row[0])] = {
+        name: String(row[1] == null ? '' : row[1]),
+        path: String(row[2] == null ? '' : row[2]),
+        url : String(row[3] == null ? '' : row[3])
+      };
     });
   }
 
@@ -418,7 +498,15 @@ function getCachedMetadataMap() {
 
 // ── 이어하기 헬퍼 함수 ──────────────────────────────────────────────────────
 function continueIndexing() {
-  rebuildMetadataIndex();
+  const result = rebuildMetadataIndex();
+  // [fix-13.8] 건너뛴 경우 재예약이 없으면 큐가 남은 채 다음 02:00까지 방치된다.
+  //            남은 큐가 있을 때만 다시 예약하고, 직전 트리거를 지워 1개로 유지한다.
+  if (result === 'skipped' &&
+      PropertiesService.getScriptProperties().getProperty('FOLDER_QUEUE')) {
+    deleteTempTriggers();
+    ScriptApp.newTrigger('continueIndexing').timeBased().after(60 * 1000).create();
+    Logger.log('[continueIndexing] 건너뜀 — 큐가 남아 1분 뒤 재시도 예약');
+  }
 }
 
 function deleteTempTriggers() {
@@ -453,7 +541,7 @@ function warmCache() {
 
   for (const row of topN) {
     if (Date.now() - startTime > MAX_WARM_TIME) break; // 시간 초과 시 즉시 종료
-    const kw = String(row[0] ?? '').toLowerCase().trim();
+    const kw = _normalizeKeyword(row[0]);   // 캐시 키와 동일 정규화
     if (!kw) continue;
     const baseKey = 'kw_' + kw;
     if (_getChunkedCache(cache, baseKey) !== null) continue; // 캐시 히트 → skip

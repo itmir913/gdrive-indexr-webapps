@@ -120,7 +120,14 @@ ADMIN_PASSWORD=your_password
 
 # OAuth 콜백 URI (Google Cloud Console의 승인된 리디렉션 URI와 정확히 일치해야 함)
 OAUTH_REDIRECT_URI=https://your-domain.com/oauth/callback
+
+# 크론·로그·날짜 경계 기준 시간대 (생략 시 Asia/Seoul)
+TZ=Asia/Seoul
 ```
+
+> 스케줄은 `TZ` 기준으로 동작합니다. `docker-compose.yml`에도 `TZ=Asia/Seoul`이
+> 설정돼 있어 별도 지정 없이 한국 시간으로 돕니다. 다른 시간대에서 운영한다면
+> 두 곳의 값을 함께 바꾸세요.
 
 ### 4단계 — 빌드 및 실행
 

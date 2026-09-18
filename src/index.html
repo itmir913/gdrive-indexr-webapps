@@ -453,6 +453,15 @@
     searchBtn.disabled = false;
     statusDiv.innerHTML = '';
 
+    // [fix-13.6] 서버는 검색식 오류를 배열이 아닌 {error}로 알린다.
+    //            이전에는 잘못된 검색식이 빈 배열로 돌아와 "검색 결과가 없습니다"로 보였다.
+    if (results && !Array.isArray(results) && results.error) {
+      guideBoxDiv.style.display = 'block';
+      statusDiv.innerHTML = `<div class="error-msg">${escHtml(results.error)}</div>`;
+      resultsDiv.innerHTML = '';
+      return;
+    }
+
     if (!results || results.length === 0) {
       statusDiv.innerHTML = '<div class="no-result">검색 결과가 없습니다. 검색 조건을 다시 설정해주세요.</div>';
       resultsDiv.innerHTML = '';

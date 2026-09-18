@@ -6,6 +6,8 @@ services:
       context: .
       target: backend
     container_name: gdrive-indexr-backend
+    environment:
+      - TZ=Asia/Seoul            # 크론·로그·날짜 경계 기준 (미설정 시 컨테이너 기본 UTC)
     env_file:
       - .env                     # FOLDER_ID, ADMIN_PASSWORD, OAUTH_REDIRECT_URI
     volumes:

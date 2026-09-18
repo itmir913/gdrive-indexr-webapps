@@ -549,6 +549,16 @@
     searchBtn.disabled = false;
     statusDiv.innerHTML = '';
 
+    // [fix-13.6] 서버는 검색식 오류·레이트 리밋을 배열이 아닌 {error}로 알린다.
+    //            이전에는 이 객체가 아래 길이 검사(undefined === 0 → false)를 통과해
+    //            results.length.toLocaleString()에서 TypeError로 떨어졌다.
+    if (results && !Array.isArray(results) && results.error) {
+      guideBoxDiv.style.display = 'block';
+      statusDiv.innerHTML = `<div class="error-msg">${escHtml(results.error)}</div>`;
+      resultsDiv.innerHTML = '';
+      return;
+    }
+
     if (!results || results.length === 0) {
       statusDiv.innerHTML = '<div class="no-result">검색 결과가 없습니다. 검색 조건을 다시 설정해주세요.</div>';
       resultsDiv.innerHTML = '';

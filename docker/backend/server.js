@@ -7,6 +7,7 @@ const sqlite3 = require('sqlite3').verbose();
 const cron = require('node-cron');
 const crypto = require('crypto');
 const { BooleanParser, tokenize, evaluate } = require('./parser');
+const { normalizeKeyword, buildSearchIndex, matchKeyword } = require('./search-keys');
 
 const app = express();
 app.use(express.json());
@@ -15,22 +16,35 @@ const PORT              = process.env.PORT || 3000;
 const FOLDER_ID         = process.env.FOLDER_ID;
 const ADMIN_PASSWORD    = process.env.ADMIN_PASSWORD;
 const OAUTH_REDIRECT_URI = process.env.OAUTH_REDIRECT_URI || 'http://localhost/oauth/callback';
+// [fix-13.1] 크론·로그·날짜 계산이 모두 같은 시간대를 쓰도록 단일 상수로 관리.
+//            미지정 시 node-cron·Date는 프로세스 로컬(컨테이너 기본 UTC)을 쓴다.
+const TIMEZONE          = process.env.TZ || 'Asia/Seoul';
 const PRECACHE_TOP_N    = 100;
+const PURGE_AFTER_DAYS  = 3;                // 미검색 키워드 삭제 기준
 const CACHE_TTL_MS      = 6 * 60 * 60 * 1000;
 const WARM_CACHE_LIMIT_MS = 4 * 60 * 1000;
 const RETRY_COUNT       = 3;
 const RETRY_DELAY_MS    = 500;
+// [fix-13.14] 캐시 미스 키워드마다 Drive를 호출하므로 쿼터 보호용 전역 상한
+const SEARCH_RATE_LIMIT     = 60;           // 창당 허용 검색 요청 수
+const SEARCH_RATE_WINDOW_MS = 60 * 1000;
 
 const CREDENTIALS_PATH = '/app/data/credentials.json';
 const TOKEN_PATH       = '/app/data/token.json';
 
 const db = new sqlite3.Database('/app/data/database.sqlite');
 let fileIndexCache = new Map();
+let searchIndex = [];   // [{ id, nameKey, pathKey }] — 정규화된 검색 키 (응답에 포함되지 않음)
 let isIndexing = false;
 let isWarmingCache = false;
+// [fix-13.9] 인덱스 교체 세대. 재빌드 완료 시 증가하며, 진행 중 계산된 결과가
+//            교체 이후에 캐시로 기록되는 것을 막는다.
+let indexGeneration = 0;
 
 // ── 로거 ─────────────────────────────────────────────────────────────────────
-const ts = () => new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Seoul' });
+const ts = () => new Date().toLocaleString('sv-SE', { timeZone: TIMEZONE });
+// [fix-13.1] 크론이 TIMEZONE 기준으로 도는데 날짜 경계만 UTC면 purge가 어긋난다
+const todayStr = () => new Date().toLocaleDateString('sv-SE', { timeZone: TIMEZONE });
 const log = {
     info:  (tag, msg) => console.log(`[${ts()}]\t[INFO ]\t[${tag.padEnd(9)}]\t${msg}`),
     warn:  (tag, msg) => console.warn(`[${ts()}]\t[WARN ]\t[${tag.padEnd(9)}]\t${msg}`),
@@ -124,7 +138,11 @@ async function withRetry(fn, retries = RETRY_COUNT, delay = RETRY_DELAY_MS) {
             return await fn();
         } catch (e) {
             const status = e.status || e.code || e.response?.status;
-            if (status === 401 || status === 403) {
+            // [fix-13.4] 403은 인증 실패가 아니다. Drive는 accessNotConfigured(API 미활성화),
+            //            domainPolicy(Workspace 제3자 앱 제한), 쿼터 초과에도 403을 주며
+            //            어느 것도 재로그인으로 풀리지 않는다. 토큰 삭제 대상은 401뿐이고,
+            //            403은 쿼터성일 수 있으므로 백오프 재시도에 맡긴다.
+            if (status === 401) {
                 clearToken();
                 throw e; // 재시도 없이 즉시 throw
             }
@@ -143,6 +161,8 @@ function loadIndexToMemory() {
             const newMap = new Map();
             rows.forEach(row => newMap.set(row.fileId, row));
             fileIndexCache = newMap;
+            // 검색 키는 응답 본문에 섞이지 않도록 별도 구조에 둔다
+            searchIndex = buildSearchIndex(rows);
             log.info('Cache', `[${fileIndexCache.size}]개 파일 로드 완료`);
             resolve();
         });
@@ -178,16 +198,9 @@ async function driveFullTextSearch(keyword) {
     return ids;
 }
 
-// ── 로컬 인덱스에서 파일명/경로 검색 ──────────────────────────────────────────
+// ── 로컬 인덱스에서 파일명/하위 폴더 경로 검색 ────────────────────────────────
 function getNameMatches(keyword) {
-    const results = [];
-    for (const [id, file] of fileIndexCache) {
-        if (file.name.toLowerCase().includes(keyword) ||
-            file.path.toLowerCase().includes(keyword)) {
-            results.push(id);
-        }
-    }
-    return results;
+    return matchKeyword(searchIndex, keyword);
 }
 
 // ── 키워드 캐시 조회 ─────────────────────────────────────────────────────────
@@ -220,12 +233,20 @@ function setCachedFileIds(keyword, fileIds) {
 // ── 키워드 → fileId 배열 (캐시 → Drive 검색 → 로컬 인덱스 합산) ──────────────
 async function getFileIdsForKeyword(keyword) {
     // [fix-B6] toLowerCase 추가 — 직접 호출 시 대소문자 불일치로 캐시 미스 방지
-    keyword = keyword.replace(/['"]/g, '').toLowerCase();
+    // [fix-13.11] 색인 측과 같은 NFC 정규화를 적용
+    keyword = normalizeKeyword(keyword);
+    // [fix-13.10] 따옴표만으로 이뤄진 질의(`""`)는 여기서 빈 문자열이 되고,
+    //             그대로 두면 includes('')가 전 파일에 걸려 F16 가드를 우회한다.
+    if (!keyword) return [];
+
     const cached = await getCachedFileIds(keyword);
     if (cached !== null) {
         log.info('Drive', `캐시 히트: [${keyword}] → [${cached.length}]건`);
         return cached;
     }
+
+    // [fix-13.9] Drive 응답을 기다리는 사이 인덱스가 교체되면 이 결과는 옛 인덱스 기준이다
+    const generationAtStart = indexGeneration;
 
     const [driveIds, nameIds] = await Promise.all([
         driveFullTextSearch(keyword).catch(e => {
@@ -236,7 +257,11 @@ async function getFileIdsForKeyword(keyword) {
     ]);
 
     const combined = [...new Set([...driveIds, ...nameIds])];
-    setCachedFileIds(keyword, combined);
+    if (indexGeneration === generationAtStart) {
+        setCachedFileIds(keyword, combined);
+    } else {
+        log.warn('Cache', `인덱스 교체로 캐시 저장 생략 [${keyword}]`);
+    }
     return combined;
 }
 
@@ -270,6 +295,9 @@ async function rebuildMetadataIndex() {
         const drive = getDriveClient();
         const folderQueue = [{ id: FOLDER_ID, path: '' }];
         const fileRows = [];
+        // [fix-13.3] 탐색 중 한 건이라도 실패하면 인덱스는 불완전하다.
+        //            불완전한 인덱스로 기존 인덱스를 덮어쓰지 않는다.
+        let traversalFailed = false;
 
         while (folderQueue.length > 0) {
             const current = folderQueue.shift();
@@ -283,6 +311,8 @@ async function rebuildMetadataIndex() {
                 }));
                 folderName = meta.data.name || '';
             } catch (e) {
+                // 이름을 못 얻으면 하위 파일의 경로가 통째로 어긋나 경로 검색이 깨진다
+                traversalFailed = true;
                 log.error('Index', `폴더 이름 조회 실패 [${current.id}]: ${e.message}`);
             }
 
@@ -305,6 +335,7 @@ async function rebuildMetadataIndex() {
                 try {
                     response = await withRetry(() => drive.files.list(params));
                 } catch (e) {
+                    traversalFailed = true;
                     log.error('Index', `파일 목록 조회 실패 [${current.id}]: ${e.message}`);
                     break;
                 }
@@ -322,6 +353,17 @@ async function rebuildMetadataIndex() {
 
                 pageToken = response.data.nextPageToken || null;
             } while (pageToken);
+        }
+
+        // [fix-13.3] 커밋 전 게이트 — 실패한 탐색 결과로 기존 인덱스를 교체하지 않는다.
+        //            네트워크 단절·쿼터·refresh token 폐기 어느 경우든 여기서 멈춘다.
+        if (traversalFailed) {
+            log.error('Index', '탐색 중 오류 발생 — 인덱스를 교체하지 않고 기존 인덱스를 유지합니다');
+            return 'error';
+        }
+        if (fileRows.length === 0) {
+            log.error('Index', '탐색 결과가 0건 — 인덱스를 교체하지 않고 기존 인덱스를 유지합니다');
+            return 'error';
         }
 
         await new Promise((resolve, reject) => {
@@ -357,6 +399,7 @@ async function rebuildMetadataIndex() {
 
         log.info('Index', `인덱싱 완료 → [${fileRows.length}]개 파일`);
         await loadIndexToMemory();
+        indexGeneration++;   // [fix-13.9] 교체 완료 — 진행 중이던 캐시 저장을 무효화
         return 'done';
     } catch (e) {
         log.error('Index', `인덱싱 중 오류 발생: ${e.message}`);
@@ -428,10 +471,32 @@ app.get('/oauth/callback', async (req, res) => {
     }
 });
 
+// ── 검색 레이트 리밋 ─────────────────────────────────────────────────────────
+// [fix-13.14] /api/search는 무인증이고 캐시 미스 키워드마다 Drive를 호출한다.
+//             임의 키워드 반복 호출로 Drive 쿼터가 소진되는 것을 막는 전역 상한.
+//             nginx 뒤라 클라이언트 IP가 모두 같게 보일 수 있어 IP별이 아닌 전역으로 둔다.
+let searchWindowStart = Date.now();
+let searchWindowCount = 0;
+
+function searchRateLimitExceeded() {
+    const now = Date.now();
+    if (now - searchWindowStart > SEARCH_RATE_WINDOW_MS) {
+        searchWindowStart = now;
+        searchWindowCount = 0;
+    }
+    searchWindowCount++;
+    return searchWindowCount > SEARCH_RATE_LIMIT;
+}
+
 // ── 검색 API ─────────────────────────────────────────────────────────────────
 app.get('/api/search', async (req, res) => {
     const query = (req.query.q || '').trim();
     if (!query) return res.json([]);
+
+    if (searchRateLimitExceeded()) {
+        log.warn('Search', `레이트 리밋 초과 — 요청 거부 [${query}]`);
+        return res.status(429).json({ error: '검색 요청이 많습니다. 잠시 후 다시 시도해 주세요.' });
+    }
 
     try {
         const tokens = tokenize(query);
@@ -458,7 +523,13 @@ app.get('/api/search', async (req, res) => {
             .sort((a, b) => a.path.localeCompare(b.path, 'ko') || a.name.localeCompare(b.name, 'ko'));
 
         log.info('Search', `[${query}] → [${results.length}]건`);
-        logKeyword(query);
+        // [fix-13.12] 질의 문자열 전체가 아니라 개별 키워드를 기록한다.
+        //             전체를 기록하면 같은 키워드가 조합·대소문자별로 흩어져 count가
+        //             쪼개지고, PRECACHE_TOP_N 상위에서 인기 키워드가 빠진다.
+        keywords.forEach(kw => {
+            const norm = normalizeKeyword(kw);
+            if (norm) logKeyword(norm);
+        });
         res.json(results);
     } catch (e) {
         log.error('Search', `쿼리 처리 실패: ${e.message}`);
@@ -497,7 +568,7 @@ app.get('/api/health', (req, res) => {
 
 // ── 키워드 로그 ──────────────────────────────────────────────────────────────
 function logKeyword(keyword) {
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayStr();   // [fix-13.1] 크론과 같은 시간대의 날짜 경계를 쓴다
     db.run(`
         INSERT INTO keyword_log (keyword, count, lastSearchDay)
         VALUES (?, 1, ?)
@@ -512,9 +583,9 @@ function logKeyword(keyword) {
 
 // ── 만료 키워드 정리 ─────────────────────────────────────────────────────────
 function purgeStaleKeywords() {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - 3);
-    const cutoffStr = cutoff.toISOString().split('T')[0];
+    // [fix-13.1] 날짜 경계도 TIMEZONE 기준. logKeyword가 쓰는 형식과 같아야 비교가 맞다.
+    const cutoff = new Date(Date.now() - PURGE_AFTER_DAYS * 24 * 60 * 60 * 1000);
+    const cutoffStr = cutoff.toLocaleDateString('sv-SE', { timeZone: TIMEZONE });
     db.run('DELETE FROM keyword_log WHERE lastSearchDay < ?', [cutoffStr],
         function (err) {
             if (err) return log.error('Purge', `키워드 정리 실패: ${err.message}`);
@@ -547,10 +618,13 @@ function warmCache() {
                     const tree = new BooleanParser(tokens).parse();
                     const kws = [...extractKeywords(tree)];
                     for (const kw of kws) {
-                        const cached = await getCachedFileIds(kw);
+                        // 캐시 조회 키를 getFileIdsForKeyword와 동일하게 정규화 (미스 방지)
+                        const norm = normalizeKeyword(kw);
+                        if (!norm) continue;
+                        const cached = await getCachedFileIds(norm);
                         if (cached !== null) continue;
-                        await getFileIdsForKeyword(kw).catch(e =>
-                            log.error('WarmCache', `워밍 실패 [${kw}]: ${e.message}`)
+                        await getFileIdsForKeyword(norm).catch(e =>
+                            log.error('WarmCache', `워밍 실패 [${norm}]: ${e.message}`)
                         );
                     }
                     warmed++;
@@ -564,9 +638,12 @@ function warmCache() {
 }
 
 // ── Cron 스케줄 ──────────────────────────────────────────────────────────────
-cron.schedule('0 2 * * *',          () => rebuildMetadataIndex().catch(e => log.error('Cron', e.message)));
-cron.schedule('30 2,7,12,17 * * *', () => warmCache());
-cron.schedule('0 3 * * *',          () => purgeStaleKeywords());
+// [fix-13.1] timezone을 명시하지 않으면 node-cron이 프로세스 로컬(컨테이너 기본 UTC)을 써서
+//            KST 11:00에 전체 재인덱싱이 돈다. 컨테이너 TZ와 무관하게 동작하도록 옵션으로 고정.
+const cronOptions = { timezone: TIMEZONE };
+cron.schedule('0 2 * * *',          () => rebuildMetadataIndex().catch(e => log.error('Cron', e.message)), cronOptions);
+cron.schedule('30 2,7,12,17 * * *', () => warmCache(), cronOptions);
+cron.schedule('0 3 * * *',          () => purgeStaleKeywords(), cronOptions);
 
 // ── 서버 시작 ────────────────────────────────────────────────────────────────
 initDB()

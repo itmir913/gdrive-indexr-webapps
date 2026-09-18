@@ -1,4 +1,7 @@
 const { tokenize, BooleanParser, evaluate } = require('./parser');
+// [fix-13.2] 예전에는 이 파일이 매칭 로직 사본을 들고 있어서 server.js와 갈라져도
+//            테스트가 통과했다. 이제 서버와 같은 구현을 직접 가져다 쓴다.
+const { normalizeKeyword, buildSearchIndex, matchKeyword } = require('./search-keys');
 
 // ── 테스트 유틸 ───────────────────────────────────────────────────────────────
 let passed = 0, failed = 0;
@@ -46,31 +49,32 @@ function search(query, fileMap) {
     }
 
     const keywords = [...extractKeywords(tree)];
+    // server.js의 loadIndexToMemory / getNameMatches와 동일 경로
+    const idx = buildSearchIndex(
+        [...fileMap].map(([id, f]) => ({ fileId: id, name: f.name, path: f.path }))
+    );
     const keywordMap = new Map();
     for (const kw of keywords) {
-        const ids = [];
-        for (const [id, file] of fileMap) {
-            if (file.name.toLowerCase().includes(kw) || (file.path || '').toLowerCase().includes(kw)) {
-                ids.push(id);
-            }
-        }
-        keywordMap.set(kw, new Set(ids));
+        keywordMap.set(kw, new Set(matchKeyword(idx, normalizeKeyword(kw))));
     }
     const allIds = new Set(fileMap.keys());
     return evaluate(tree, keywordMap, allIds);
 }
 
 // ── 파일 데이터셋 ─────────────────────────────────────────────────────────────
+// [fix-13.2] 실제 인덱스처럼 모든 path가 루트 폴더 이름으로 시작하게 둔다.
+//            예전 데이터셋은 공통 루트가 없어서 경로 매칭 버그가 드러나지 않았다.
+const ROOT = '2027 대입자료';
 const files = new Map([
-    ['f1', { name: '서울대 수시 논술 2027', path: '서울대' }],
-    ['f2', { name: '연세대 수시 면접 2027', path: '연세대' }],
-    ['f3', { name: '고려대 정시 논술 2026', path: '고려대' }],
-    ['f4', { name: '서울대 정시 교과 2026', path: '서울대' }],
-    ['f5', { name: '카이스트 논술 면접 2027', path: '이공계' }],
-    ['f6', { name: 'android 개발 가이드', path: '기술문서' }],       // 'and' 포함
-    ['f7', { name: 'notable 키워드 테스트', path: '기술문서' }],      // 'not' 포함
-    ['f8', { name: 'oracle 데이터베이스', path: '기술문서' }],        // 'or' 포함
-    ['f9', { name: '교과 중심 학생부 전형', path: '학생부' }],
+    ['f1', { name: '서울대 수시 논술 2027', path: `${ROOT}/서울대` }],
+    ['f2', { name: '연세대 수시 면접 2027', path: `${ROOT}/연세대` }],
+    ['f3', { name: '고려대 정시 논술 2026', path: `${ROOT}/고려대` }],
+    ['f4', { name: '서울대 정시 교과 2026', path: `${ROOT}/서울대` }],
+    ['f5', { name: '카이스트 논술 면접 2027', path: `${ROOT}/이공계` }],
+    ['f6', { name: 'android 개발 가이드', path: `${ROOT}/기술문서` }],       // 'and' 포함
+    ['f7', { name: 'notable 키워드 테스트', path: `${ROOT}/기술문서` }],      // 'not' 포함
+    ['f8', { name: 'oracle 데이터베이스', path: `${ROOT}/기술문서` }],        // 'or' 포함
+    ['f9', { name: '교과 중심 학생부 전형', path: `${ROOT}/학생부` }],
 ]);
 
 // ── 1. tokenize 검증 ──────────────────────────────────────────────────────────
@@ -183,6 +187,40 @@ assert('논술 AND → 빈 결과', search('논술 AND', files), []);
 // 트레일링 OR: OR(논술, EMPTY) → 논술 결과
 assertTokens('트레일링 OR 토크나이즈', '논술 OR', ['논술', 'OR']);
 assert('논술 OR → 논술 결과', search('논술 OR', files), ['f1', 'f3', 'f5']);
+
+// ── 11. 13차 감사 회귀 테스트 ────────────────────────────────────────────────
+console.log('\n[11] 13차 감사 회귀 (경로 매칭 / 빈 키워드 / 유니코드 정규화)');
+
+// [fix-13.2] 루트 폴더 이름 조각은 전 파일에 걸리면 안 된다
+assert('루트 폴더명 전체는 매칭 안 됨', search(ROOT, files), []);
+assert('루트 폴더명 조각 "2027 대입"은 매칭 안 됨', search('2027 대입', files), []);
+assert('"대입"은 파일명에도 없으므로 0건', search('대입', files), []);
+// 하위 폴더 이름은 계속 검색돼야 한다 (사용자 선택: 파일명 + 하위 폴더 경로)
+assert('하위 폴더명 "이공계" 검색', search('이공계', files), ['f5']);
+assert('하위 폴더명 "기술문서" 검색', search('기술문서', files), ['f6', 'f7', 'f8']);
+assert('하위 폴더명 + 파일명 혼합 (기술문서 AND oracle)',
+       search('기술문서 AND oracle', files), ['f8']);
+
+// [fix-13.10] 따옴표만 있는 질의가 전체 목록을 반환하면 안 된다
+assert('빈 키워드는 전건 매칭 금지', matchKeyword(buildSearchIndex(
+    [...files].map(([id, f]) => ({ fileId: id, name: f.name, path: f.path }))), ''), []);
+assert('normalizeKeyword(\'""\') → 빈 문자열',
+       [normalizeKeyword('""')], ['']);
+assert('따옴표 질의는 0건', search('""', files), []);
+
+// [fix-13.11] NFD로 저장된 파일명도 NFC 검색어로 찾혀야 한다
+const nfdFiles = new Map([
+    ['n1', { name: '논술 자료'.normalize('NFD'), path: `${ROOT}/서울대`.normalize('NFD') }],
+]);
+assert('NFD 파일명을 NFC 검색어로 매칭', search('논술', nfdFiles), ['n1']);
+
+// [fix-13.5] 시트/DB가 숫자·날짜를 돌려줘도 죽지 않아야 한다
+const coercedFiles = new Map([
+    ['c1', { name: 2027, path: `${ROOT}/서울대` }],
+    ['c2', { name: true, path: null }],
+]);
+assert('숫자 파일명 매칭 (TypeError 없이)', search('2027', coercedFiles), ['c1']);
+assert('null 경로에서도 안전', search('서울대', coercedFiles), ['c1']);
 
 // ── 결과 ─────────────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(50)}`);

@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf 
 COPY backend/package*.json ./
 RUN npm install
 
-COPY backend/server.js backend/parser.js ./
+COPY backend/server.js backend/parser.js backend/search-keys.js ./
 RUN mkdir -p /app/data
 
 EXPOSE 3000
