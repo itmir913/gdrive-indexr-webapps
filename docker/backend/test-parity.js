@@ -29,8 +29,8 @@ const { runSearch } = require('./search-pipeline');
 
 // ── 공용 픽스처 ──────────────────────────────────────────────────────────────
 // 실제 인덱스처럼 모든 경로가 루트 폴더 이름으로 시작한다.
-const ROOT = '2027 대입자료';
-const CORPUS = [
+// [fix-13.B4] Drive는 폴더명에 '/'를 허용한다. 슬래시가 든 루트로도 전 항목을 돌린다.
+const makeCorpus = (ROOT) => [
     { fileId: 'f1', name: '서울대 수시 논술 2027',  path: `${ROOT}/서울대`,   url: 'u1' },
     { fileId: 'f2', name: '연세대 수시 면접 2027',  path: `${ROOT}/연세대`,   url: 'u2' },
     { fileId: 'f3', name: '고려대 정시 논술 2026',  path: `${ROOT}/고려대`,   url: 'u3' },
@@ -66,7 +66,7 @@ function makeCacheService() {
 }
 
 /** FileIndex 시트 흉내 — getCachedMetadataMap이 쓰는 최소 표면만 */
-function makeSpreadsheetApp() {
+function makeSpreadsheetApp(CORPUS) {
     const header = ['fileId', '파일명', '폴더경로', 'URL', '수정일'];
     const rows = CORPUS.map(r => [r.fileId, r.name, r.path, r.url, '2026-01-01']);
     const data = [header, ...rows];
@@ -87,14 +87,16 @@ function makeSpreadsheetApp() {
     return { openById: () => ({ getSheetByName: (n) => (n === 'FileIndex' ? sheet : null) }) };
 }
 
-function loadGas() {
+function loadGas(CORPUS, ROOT) {
     const ctx = {
         Drive: {},
         DriveApp: {},
-        SpreadsheetApp: makeSpreadsheetApp(),
+        SpreadsheetApp: makeSpreadsheetApp(CORPUS),
         CacheService: makeCacheService(),
         PropertiesService: { getScriptProperties: () => ({
-            getProperty: () => null, setProperty: () => {}, deleteProperty: () => {},
+            // [fix-13.B4] 색인 시점에 저장되는 루트 폴더 이름
+            getProperty: (k) => (k === 'ROOT_FOLDER_NAME' ? ROOT : null),
+            setProperty: () => {}, deleteProperty: () => {},
         }) },
         LockService: { getScriptLock: () => ({
             tryLock: () => true, waitLock: () => {}, releaseLock: () => {},
@@ -116,30 +118,14 @@ function loadGas() {
     return ctx;
 }
 
-const G = loadGas();
-
-// ── Docker 측: 진짜 runSearch 호출 ───────────────────────────────────────────
-const DOCKER_INDEX = SK.buildSearchIndex(CORPUS);
-const DOCKER_ROWS = new Map(CORPUS.map(r => [r.fileId, r]));
-
-function dockerIO(loggedOut) {
-    return {
-        // server.js의 getFileIdsForKeyword에서 SQLite 캐시와 Drive만 뺀 것
-        resolveKeyword: async (kw) => SK.matchKeyword(DOCKER_INDEX, SK.normalizeKeyword(kw)),
-        allIds: () => new Set(CORPUS.map(r => r.fileId)),
-        lookup: (id) => DOCKER_ROWS.get(id),
-        logKeyword: (kw) => loggedOut.push(kw),
-    };
-}
-
 // ── 테스트 유틸 ──────────────────────────────────────────────────────────────
 let passed = 0, failed = 0;
 
 function eq(label, a, b) {
     const sa = JSON.stringify(a), sb = JSON.stringify(b);
-    if (sa === sb) { passed++; console.log(`  ✓ ${label}`); return; }
+    if (sa === sb) { passed++; return; }
     failed++;
-    console.log(`  ✗ ${label}`);
+    console.log(`  \u2717 ${label}`);
     console.log(`      Docker: ${sa}`);
     console.log(`      GAS   : ${sb}`);
 }
@@ -148,31 +134,6 @@ function eq(label, a, b) {
 const keyset = (rows) =>
     rows.map(r => `${String(r.name)}|${String(r.path)}|${String(r.url)}`).sort();
 
-const QUERIES = [
-    '논술', '면접', '서울대', '교과',
-    '논술 AND 면접', '논술 OR 면접', '논술 NOT 면접',
-    'NOT 논술', '(논술 OR 면접) AND 서울대', '논술 AND (면접 OR 교과)',
-    '논술 or 면접', '논술 And 면접',
-    'android', 'notable', 'oracle',
-    '공백 포함 키워드', '서울 대학교',
-    '이공계', '기술문서', '학생부',
-    ROOT, '2027 대입', '대입자료',
-    '2027',
-    '논술'.normalize('NFD'), '논술'.normalize('NFC'),
-    '""', "''", '"논술"',
-    '논술 AND', '논술 OR', 'AND 논술', '논술 AND AND 면접',
-    '(논술', '논술)', '(논술 OR 면접))', '서울대 (논술)',
-    '', '   ', 'AND', 'NOT',
-    '논술 NOT 존재하지않는키워드',
-    '((논술))', '(((면접)))',
-];
-
-// ── 1. tokenize 대조 ─────────────────────────────────────────────────────────
-console.log('\n[1] tokenize 대조');
-for (const q of QUERIES) eq(`tokenize(${JSON.stringify(q)})`, tokenize(q), G.tokenize(q));
-
-// ── 2. 파서 AST + leftover 대조 ──────────────────────────────────────────────
-console.log('\n[2] 파서 AST + leftover 대조');
 function astString(n) {
     if (!n) return 'null';
     if (n.type === 'EMPTY') return 'EMPTY';
@@ -180,51 +141,102 @@ function astString(n) {
     if (n.type === 'NOT') return `NOT(${astString(n.operand)})`;
     return `${n.type}(${astString(n.left)}, ${astString(n.right)})`;
 }
-for (const q of QUERIES) {
-    const dp = new BooleanParser(tokenize(q)); const dTree = dp.parse();
-    const gp = new G.BooleanParser(G.tokenize(q)); const gTree = gp.parse();
-    eq(`AST(${JSON.stringify(q)})`,
-       { ast: astString(dTree), leftover: dp.pos < dp.tokens.length },
-       { ast: astString(gTree), leftover: gp.pos < gp.tokens.length });
-}
 
-// ── 3. 정규화·경로 헬퍼 대조 ─────────────────────────────────────────────────
-console.log('\n[3] 정규화·경로 헬퍼 대조');
 const KEY_INPUTS = ['논술', '  논술  ', '"논술"', "'논술'", '""', 'ABC', 'Abc',
                     '논술'.normalize('NFD'), 2027, true, null, undefined, '', '3-1'];
-for (const v of KEY_INPUTS) {
-    eq(`normalizeKeyword(${JSON.stringify(v)})`, SK.normalizeKeyword(v), G._normalizeKeyword(v));
-    eq(`normKey(${JSON.stringify(v)})`, SK.normKey(v), G._normKey(v));
-}
-for (const v of [`${ROOT}/서울대`, `${ROOT}/서울대/2027`, ROOT, '', null, undefined, 'a/b/c', '/선행슬래시']) {
-    eq(`toSearchPath(${JSON.stringify(v)})`, SK.toSearchPath(v), G._toSearchPath(v));
+
+function queriesFor(ROOT) {
+    return [
+        '논술', '면접', '서울대', '교과',
+        '논술 AND 면접', '논술 OR 면접', '논술 NOT 면접',
+        'NOT 논술', '(논술 OR 면접) AND 서울대', '논술 AND (면접 OR 교과)',
+        '논술 or 면접', '논술 And 면접',
+        'android', 'notable', 'oracle',
+        '공백 포함 키워드', '서울 대학교',
+        '이공계', '기술문서', '학생부',
+        ROOT, ROOT.slice(0, 7), '대입자료',          // 루트 전체 / 조각 → 0건이어야 한다
+        '2027', '2028',
+        '논술'.normalize('NFD'), '논술'.normalize('NFC'),
+        '""', "''", '"논술"',
+        '논술 AND', '논술 OR', 'AND 논술', '논술 AND AND 면접',
+        '(논술', '논술)', '(논술 OR 면접))', '서울대 (논술)',
+        '', '   ', 'AND', 'NOT',
+        '논술 NOT 존재하지않는키워드',
+        '((논술))', '(((면접)))',
+    ];
 }
 
-// ── 4. end-to-end 대조: 진짜 doSearch vs 진짜 runSearch ──────────────────────
-console.log('\n[4] end-to-end 대조 (GAS doSearch ↔ Docker runSearch)');
-(async () => {
+// ── 한 세트 실행 ─────────────────────────────────────────────────────────────
+async function runSuite(label, ROOT) {
+    console.log(`\n── ${label} (루트: ${JSON.stringify(ROOT)}) ──`);
+    const CORPUS = makeCorpus(ROOT);
+    const G = loadGas(CORPUS, ROOT);
+
+    const DOCKER_INDEX = SK.buildSearchIndex(CORPUS, ROOT);
+    const DOCKER_ROWS = new Map(CORPUS.map(r => [r.fileId, r]));
+    const dockerIO = (logged) => ({
+        // server.js의 getFileIdsForKeyword에서 SQLite 캐시와 Drive만 뺀 것
+        resolveKeyword: async (kw) => SK.matchKeyword(DOCKER_INDEX, SK.normalizeKeyword(kw)),
+        allIds: () => new Set(CORPUS.map(r => r.fileId)),
+        lookup: (id) => DOCKER_ROWS.get(id),
+        logKeyword: (kw) => logged.push(kw),
+    });
+
+    const QUERIES = queriesFor(ROOT);
+
+    // 1. tokenize
+    for (const q of QUERIES) eq(`tokenize(${JSON.stringify(q)})`, tokenize(q), G.tokenize(q));
+
+    // 2. 파서 AST + leftover
+    for (const q of QUERIES) {
+        const dp = new BooleanParser(tokenize(q)); const dTree = dp.parse();
+        const gp = new G.BooleanParser(G.tokenize(q)); const gTree = gp.parse();
+        eq(`AST(${JSON.stringify(q)})`,
+           { ast: astString(dTree), leftover: dp.pos < dp.tokens.length },
+           { ast: astString(gTree), leftover: gp.pos < gp.tokens.length });
+    }
+
+    // 3. 정규화·경로 헬퍼
+    for (const v of KEY_INPUTS) {
+        eq(`normalizeKeyword(${JSON.stringify(v)})`, SK.normalizeKeyword(v), G._normalizeKeyword(v));
+        eq(`normKey(${JSON.stringify(v)})`, SK.normKey(v), G._normKey(v));
+    }
+    for (const v of [`${ROOT}/서울대`, `${ROOT}/서울대/2027`, ROOT, '', null, undefined, 'a/b/c', '/선행슬래시']) {
+        eq(`toSearchPath(${JSON.stringify(v)})`, SK.toSearchPath(v, ROOT), G._toSearchPath(v, ROOT));
+    }
+
+    // 4. end-to-end: 진짜 doSearch ↔ 진짜 runSearch
     for (const q of QUERIES) {
         const dLogged = [];
         const d = await runSearch(q, dockerIO(dLogged));
-
         G.__logged = [];
         const g = G.doSearch(q);
 
-        // 4-1. 응답 형태: 오류 객체인지 결과 배열인지
         const dShape = d.error ? { error: d.error } : { results: keyset(d.results) };
         const gShape = (g && !Array.isArray(g) && g.error)
             ? { error: g.error }
             : { results: keyset(g) };
         eq(`search(${JSON.stringify(q)})`, dShape, gShape);
-
-        // 4-2. 키워드 로깅: 검증 통과 질의에서만, 같은 정규화 키로
         eq(`logged(${JSON.stringify(q)})`, [...dLogged].sort(), [...G.__logged].sort());
     }
-})().then(() => {
+
+    // 5. 루트 폴더명이 결과를 오염시키지 않는지 (양쪽 각각 절대 검증)
+    for (const frag of [ROOT, ROOT.slice(0, 7), '대입자료']) {
+        const d = await runSearch(frag, dockerIO([]));
+        eq(`루트 조각 ${JSON.stringify(frag)} → 0건`,
+           { n: d.error ? -1 : d.results.length }, { n: 0 });
+    }
+}
+
+(async () => {
+    // [fix-13.B4] Drive는 폴더명에 '/'를 허용한다. 두 형태 모두에서 같아야 한다.
+    await runSuite('일반 루트',     '2027 대입자료');
+    await runSuite('슬래시 든 루트', '2027/2028학년도 대입자료');
+
     console.log(`\n${'─'.repeat(56)}`);
-    console.log(`GAS ↔ Docker 대조: 총 ${passed + failed}개 | ✓ ${passed} | ✗ ${failed}`);
+    console.log(`GAS ↔ Docker 대조: 총 ${passed + failed}개 | \u2713 ${passed} | \u2717 ${failed}`);
     if (failed > 0) {
         console.log('\n두 구현이 갈라졌다. 어느 쪽이 옳은지 정한 뒤 양쪽을 함께 고칠 것.');
         process.exit(1);
     }
-});
+})();

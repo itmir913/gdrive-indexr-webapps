@@ -52,6 +52,8 @@ let indexGeneration = 0;
 let lastRebuild  = { at: null, result: null, message: null };
 let lastDriveError = { at: null, message: null };
 let rebuildNote = null;   // 이번 재빌드가 남긴 사유 (래퍼가 lastRebuild로 옮긴다)
+// [fix-13.B4] 색인 시점의 루트 폴더 이름. 경로에서 루트 세그먼트를 정확히 떼는 데 쓴다.
+let rootFolderName = '';
 
 // ── 로거 ─────────────────────────────────────────────────────────────────────
 const ts = () => new Date().toLocaleString('sv-SE', { timeZone: TIMEZONE });
@@ -94,6 +96,14 @@ function initDB() {
                     keyword  TEXT PRIMARY KEY,
                     fileIds  TEXT NOT NULL,
                     cachedAt INTEGER NOT NULL
+                )
+            `, (err) => { if (err) return reject(err); });
+            // [fix-13.B4] 루트 폴더 이름 보관용. CREATE TABLE IF NOT EXISTS라
+            //             기존 DB에도 그대로 붙으며 마이그레이션이 필요 없다.
+            db.run(`
+                CREATE TABLE IF NOT EXISTS app_meta (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT
                 )
             `, (err) => {
                 if (err) return reject(err);
@@ -168,8 +178,23 @@ async function withRetry(fn, retries = RETRY_COUNT, delay = RETRY_DELAY_MS) {
     }
 }
 
+// ── app_meta 접근 ────────────────────────────────────────────────────────────
+function getMeta(key) {
+    return new Promise((resolve) => {
+        db.get('SELECT value FROM app_meta WHERE key = ?', [key],
+            (err, row) => resolve(err || !row ? null : row.value));
+    });
+}
+
+function setMeta(key, value) {
+    db.run('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)', [key, String(value ?? '')],
+        (err) => { if (err) log.error('DB', `app_meta 저장 실패 [${key}]: ${err.message}`); });
+}
+
 // ── 메모리 캐시 로드 ─────────────────────────────────────────────────────────
-function loadIndexToMemory() {
+async function loadIndexToMemory() {
+    // [fix-13.B4] 색인 때 저장해 둔 루트 폴더 이름을 먼저 읽는다 (없으면 옛 방식 폴백)
+    rootFolderName = (await getMeta('rootFolderName')) || '';
     return new Promise((resolve, reject) => {
         log.info('Cache', '인덱스 로딩 중...');
         db.all('SELECT fileId, name, path, url FROM file_index', [], (err, rows) => {
@@ -178,7 +203,7 @@ function loadIndexToMemory() {
             rows.forEach(row => newMap.set(row.fileId, row));
             fileIndexCache = newMap;
             // 검색 키는 응답 본문에 섞이지 않도록 별도 구조에 둔다
-            searchIndex = buildSearchIndex(rows);
+            searchIndex = buildSearchIndex(rows, rootFolderName);
             log.info('Cache', `[${fileIndexCache.size}]개 파일 로드 완료`);
             resolve();
         });
@@ -326,6 +351,7 @@ async function _runRebuild() {
         // [fix-13.3] 탐색 중 한 건이라도 실패하면 인덱스는 불완전하다.
         //            불완전한 인덱스로 기존 인덱스를 덮어쓰지 않는다.
         let traversalFailed = false;
+        let rootName = '';
 
         while (folderQueue.length > 0) {
             const current = folderQueue.shift();
@@ -338,6 +364,8 @@ async function _runRebuild() {
                     supportsAllDrives: true,
                 }));
                 folderName = meta.data.name || '';
+                // [fix-13.B4] 큐의 첫 항목이 루트다 (path === '')
+                if (current.path === '') rootName = folderName;
             } catch (e) {
                 // 이름을 못 얻으면 하위 파일의 경로가 통째로 어긋나 경로 검색이 깨진다
                 traversalFailed = true;
@@ -435,6 +463,7 @@ async function _runRebuild() {
             });
         });
 
+        setMeta('rootFolderName', rootName);   // [fix-13.B4]
         log.info('Index', `인덱싱 완료 → [${fileRows.length}]개 파일`);
         await loadIndexToMemory();
         return 'done';

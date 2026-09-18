@@ -12,6 +12,7 @@ const PRECACHE_TOP_N      = 100;           // warmCache 사전 워밍 대상 상
 const REBUILD_FLAG_KEY    = 'REBUILD_STARTED_AT';  // 재빌드 중복 실행 방지 플래그 (ScriptProperties)
 const REBUILD_FLAG_LOCK_MS = 10000;        // 플래그 test-and-set 동안만 잡는 짧은 잠금
 const REBUILD_STALE_MS    = 10 * 60 * 1000; // 이 시간이 지난 플래그는 비정상 종료로 보고 무시
+const ROOT_NAME_KEY       = 'ROOT_FOLDER_NAME'; // 색인 시점의 루트 폴더 이름 (경로 접두사 제거용)
 const DRIVE_SERVICE       = Drive;         // Apps Script 서비스 식별자 (편집기 → 서비스 → 식별자)
 
 // ── 메타데이터 인덱스 재빌드 (매일 02:00 트리거 / 시간 초과 방지 / 이어하기 지원) ───
@@ -130,6 +131,8 @@ function _rebuildMetadataIndexImpl() {
     try {
       const folder = DriveApp.getFolderById(current.id);
       const currentPath = current.path ? current.path + '/' + folder.getName() : folder.getName();
+      // [fix-13.B4] 큐의 첫 항목이 루트다. 이름을 저장해 두면 경로에서 정확히 뗄 수 있다.
+      if (current.path === '') props.setProperty(ROOT_NAME_KEY, folder.getName());
       const files = folder.getFiles();
 
       while (files.hasNext()) {
@@ -354,12 +357,28 @@ function _extractKeywords(node) {
   return new Set([..._extractKeywords(node.left), ..._extractKeywords(node.right)]);
 }
 
-// [fix-13.2] 모든 폴더경로는 루트 폴더 이름으로 시작하므로 그대로 매칭하면 루트 이름의
-//            부분 문자열이 전 파일에 걸린다. 첫 세그먼트(루트)를 떼고 하위 경로만 남긴다.
-function _toSearchPath(path) {
-  const s = String(path == null ? '' : path);
+// [fix-13.2]  모든 폴더경로는 루트 폴더 이름으로 시작하므로 그대로 매칭하면 루트 이름의
+//             부분 문자열이 전 파일에 걸린다. 루트 세그먼트를 떼고 하위 경로만 남긴다.
+// [fix-13.B4] 루트 이름을 알면 정확한 접두사로 제거한다. Drive는 폴더명에 '/'를 허용하므로
+//             ("2027/2028학년도 대입자료") 첫 '/'로 자르면 루트 뒷부분이 경로에 남는다.
+function _toSearchPath(path, rootName) {
+  // [fix-13.B4] 접두사 비교 전에 양쪽을 NFC로 맞춘다. macOS 업로드 경로는 NFD라
+  //             정규화 전에 비교하면 루트 접두사가 안 맞아 전체 경로가 그대로 남고,
+  //             결국 루트 이름 조각이 다시 전 파일에 걸린다.
+  const s = String(path == null ? '' : path).normalize('NFC');
+  const root = String(rootName == null ? '' : rootName).normalize('NFC');
+  if (root) {
+    if (s === root) return '';
+    if (s.lastIndexOf(root + '/', 0) === 0) return s.slice(root.length + 1);
+    return s;   // 루트 밖의 경로 — 그대로 둔다
+  }
   const i = s.indexOf('/');
   return i === -1 ? '' : s.slice(i + 1);
+}
+
+/** 색인 시점에 저장해 둔 루트 폴더 이름 (없으면 빈 문자열 → 옛 방식 폴백) */
+function _getRootFolderName() {
+  return PropertiesService.getScriptProperties().getProperty(ROOT_NAME_KEY) || '';
 }
 
 // ── 키워드 → fileId 배열 (캐시 우선) ────────────────────────────────────────
@@ -386,13 +405,14 @@ function getFileIdsForKeyword(keyword) {
 function getNameMatchesFromSheet(keyword) {
   if (!keyword) return [];   // [fix-13.10] 빈 키워드는 includes('')로 전건 매칭된다
   const map = getCachedMetadataMap();
+  const rootName = _getRootFolderName();   // [fix-13.B4]
   // [fix-13.2]  파일명 + 하위 폴더 경로(루트 폴더명 제외)를 매칭 — Docker판과 동일 기준
   // [fix-13.5]  meta.name이 Number/Date일 수 있어 _normKey가 String()으로 감싼다
   // [fix-13.11] 색인 측과 질의 측 모두 NFC로 정규화
   return Object.entries(map)
     .filter(([, meta]) =>
       _normKey(meta.name).includes(keyword) ||
-      _normKey(_toSearchPath(meta.path)).includes(keyword))
+      _normKey(_toSearchPath(meta.path, rootName)).includes(keyword))
     .map(([id]) => id);
 }
 

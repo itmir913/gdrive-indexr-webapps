@@ -226,7 +226,7 @@ npm test
 | 스크립트 | 내용 |
 |---|---|
 | `npm run test:parser` | Boolean 파서·검색 키 단위 테스트 (76개) |
-| `npm run test:parity` | **GAS ↔ Docker 구현 대조** (212개) |
+| `npm run test:parity` | **GAS ↔ Docker 구현 대조** (438개, 일반 루트 / 슬래시 든 루트 2세트) |
 
 ### 두 구현을 함께 고쳐야 하는 이유
 
