@@ -213,3 +213,38 @@ curl http://localhost:3000/api/health
   "indexedCount": 1024
 }
 ```
+
+---
+
+## 테스트
+
+```bash
+cd docker/backend
+npm test
+```
+
+| 스크립트 | 내용 |
+|---|---|
+| `npm run test:parser` | Boolean 파서·검색 키 단위 테스트 (76개) |
+| `npm run test:parity` | **GAS ↔ Docker 구현 대조** (168개) |
+
+### 두 구현을 함께 고쳐야 하는 이유
+
+이 저장소에는 같은 앱의 구현이 둘 있습니다 — `src/Code.gs`(Apps Script)와
+`docker/backend/`(Node.js). 검색 동작의 핵심(토크나이즈, Boolean 파싱, 키워드 정규화,
+경로 매칭, 집합 연산)은 **양쪽에 따로 작성돼 있고 자동으로 동기화되지 않습니다.**
+
+`test-parity.js`는 같은 질의·같은 픽스처를 두 구현에 통과시켜 토큰 배열, AST,
+정규화 결과, 최종 검색 결과가 모두 일치하는지 검사합니다. 한쪽만 고치면 실패합니다.
+
+**아래 로직을 건드릴 때는 반드시 양쪽을 함께 수정하고 `npm run test:parity`를 돌리세요.**
+
+| 로직 | Docker | GAS |
+|---|---|---|
+| 토크나이즈 / 파서 | `backend/parser.js` | `Code.gs`의 `tokenize`, `BooleanParser` |
+| 키워드 정규화 · 경로 · 매칭 | `backend/search-keys.js` | `Code.gs`의 `_normKey`, `_normalizeKeyword`, `_toSearchPath` |
+| 집합 연산 | `backend/parser.js`의 `evaluate` | `Code.gs`의 `evaluate`, `intersect`, `union`, `difference` |
+
+`evaluate`만은 구조가 다릅니다. Docker는 키워드를 미리 병렬 해결해 Map으로 넘기고,
+GAS는 동기 환경이라 평가 중 인라인으로 해결하며 AND 단축평가로 Drive 호출을 아낍니다.
+결과 집합은 같아야 하며, 그 일치를 `test-parity.js`가 검증합니다.

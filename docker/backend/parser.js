@@ -19,7 +19,11 @@ function BooleanParser(tokens) {
     this.pos = 0;
 }
 
-BooleanParser.prototype.peek = function() { return this.tokens[this.pos] || null; };
+// [fix-13.15] 값이 아니라 인덱스로 끝을 판정한다. `|| null`은 falsy 토큰(빈 문자열)을
+//             토큰 부재와 구분하지 못한다. Code.gs 쪽 구현과 동작을 맞춘 것이기도 하다.
+BooleanParser.prototype.peek = function() {
+    return this.pos < this.tokens.length ? this.tokens[this.pos] : null;
+};
 BooleanParser.prototype.consume = function() { return this.tokens[this.pos++]; };
 
 BooleanParser.prototype.parse = function() { return this.parseOr() || { type: 'EMPTY' }; };
