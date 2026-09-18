@@ -32,6 +32,9 @@ const RETRY_DELAY_MS    = 500;
 //             nginx 뒤라 클라이언트 IP가 구분되지 않아 전역으로 둔다.
 const DRIVE_CALL_BUDGET      = 200;         // 창당 허용 Drive API 호출 수
 const DRIVE_BUDGET_WINDOW_MS = 60 * 1000;
+// [fix-13.D5] 캐시 워밍은 백그라운드 작업이다. 예산을 다 쓰면 그 시각에 검색하던
+//   교사가 429를 본다. 워밍은 예산의 이 비율까지만 쓰고 나머지는 사용자에게 남긴다.
+const WARM_BUDGET_SHARE      = 0.5;
 
 const CREDENTIALS_PATH = '/app/data/credentials.json';
 const TOKEN_PATH       = '/app/data/token.json';
@@ -41,9 +44,6 @@ let fileIndexCache = new Map();
 let searchIndex = [];   // [{ id, nameKey, pathKey }] — 정규화된 검색 키 (응답에 포함되지 않음)
 let isIndexing = false;
 let isWarmingCache = false;
-// [fix-13.9] 인덱스 교체 세대. 재빌드 확정 시 증가하며, 진행 중 계산된 결과가
-//            교체 이후에 캐시로 기록되는 것을 막는다.
-let indexGeneration = 0;
 // [fix-13.B2] 3번(빈 인덱스 커밋 차단)과 4번(403에 토큰 삭제 안 함)을 함께 고친 결과,
 //             refresh token 폐기나 영구 403이 아무 흔적도 남기지 않게 됐다. 예전에는
 //             원인은 틀렸어도 "미인증"이 화면에 보였다. 마지막 재빌드 결과와 마지막
@@ -163,6 +163,17 @@ async function withRetry(fn, retries = RETRY_COUNT, delay = RETRY_DELAY_MS) {
             return await fn();
         } catch (e) {
             const status = e.status || e.code || e.response?.status;
+            // [fix-13.D2] refresh token이 폐기되면 토큰 엔드포인트가 400 invalid_grant를
+            //   준다. 401이 아니라서 토큰이 그대로 남고, isAuthenticated()는 refresh_token
+            //   존재만 보므로 "인증됨"인 채 모든 캐시 미스 검색이 3.5초 재시도를 물었다.
+            //   재로그인 외에 복구 경로가 없으므로 401과 같이 취급한다.
+            const oauthError = e.response?.data?.error;
+            if (oauthError === 'invalid_grant') {
+                log.error('Auth', 'refresh token 폐기(invalid_grant) — 재인증 필요');
+                noteDriveError('refresh token이 폐기되었습니다. 관리자 설정에서 다시 로그인하세요.');
+                clearToken();
+                throw e;
+            }
             // [fix-13.4] 403은 인증 실패가 아니다. Drive는 accessNotConfigured(API 미활성화),
             //            domainPolicy(Workspace 제3자 앱 제한), 쿼터 초과에도 403을 주며
             //            어느 것도 재로그인으로 풀리지 않는다. 토큰 삭제 대상은 401뿐이고,
@@ -300,8 +311,11 @@ async function getFileIdsForKeyword(keyword) {
     // [fix-13.C3] 여기서부터 Drive가 필요하다. 예산이 없으면 이 요청은 429다.
     if (driveBudgetExhausted()) throw new DriveBudgetError();
 
-    // [fix-13.9] Drive 응답을 기다리는 사이 인덱스가 교체되면 이 결과는 옛 인덱스 기준이다
-    const generationAtStart = indexGeneration;
+    // [fix-13.9][fix-13.D3] 이 결과가 어느 인덱스를 기준으로 계산됐는지 참조로 붙든다.
+    //   세대 카운터는 '교체 확정' 시점에 올라가고 searchIndex는 COMMIT 뒤에 바뀌어
+    //   두 시점 사이에 시작한 검색이 옛 인덱스 결과를 새 세대로 캐싱했다.
+    //   loadIndexToMemory가 항상 새 배열을 대입하므로 참조 비교가 정확하다.
+    const indexAtStart = searchIndex;
 
     const [drive, nameIds] = await Promise.all([
         driveFullTextSearch(keyword).catch(e => {
@@ -318,7 +332,7 @@ async function getFileIdsForKeyword(keyword) {
     //   되는 상태로 고정시키고, 교사는 "자료가 없다"고 판단하게 된다.
     if (!drive.complete) {
         log.warn('Cache', `Drive 결과 불완전 — 캐시 저장 생략 [${keyword}]`);
-    } else if (indexGeneration !== generationAtStart) {
+    } else if (searchIndex !== indexAtStart) {
         log.warn('Cache', `인덱스 교체로 캐시 저장 생략 [${keyword}]`);
     } else {
         setCachedFileIds(keyword, combined);
@@ -443,12 +457,6 @@ async function _runRebuild() {
             rebuildNote = '탐색 결과 0건 — 기존 인덱스 유지 (FOLDER_ID와 폴더 내용 확인 필요)';
             return 'error';
         }
-
-        // [fix-13.B5] 세대를 교체 '완료' 시점이 아니라 '확정' 시점에 올린다. 완료 시점에
-        //             올리면 DELETE~loadIndexToMemory 구간에 Drive 응답이 도착한 검색이
-        //             같은 세대로 판정돼 옛 인덱스 기준 결과를 6시간 캐싱했다.
-        //             롤백되면 불필요하게 캐시 저장을 한 번 건너뛸 뿐 손해는 없다.
-        indexGeneration++;
 
         await new Promise((resolve, reject) => {
             db.run('BEGIN TRANSACTION', (err) => {
@@ -580,6 +588,12 @@ function driveBudgetExhausted() {
     return driveWindowCalls >= DRIVE_CALL_BUDGET;
 }
 
+/** [fix-13.D5] 워밍이 계속해도 되는가 — 사용자 몫을 남겨 둔다 */
+function warmBudgetAvailable() {
+    rollDriveWindow();
+    return driveWindowCalls < DRIVE_CALL_BUDGET * WARM_BUDGET_SHARE;
+}
+
 // [fix-13.C3] 예산 초과는 '캐시 미스라 Drive가 필요한' 시점에만 판정한다.
 //   요청 진입부에서 막으면 캐시로 끝날 검색까지 429가 되는데, 그건 쿼터를 전혀
 //   보호하지 못하면서 정상 사용만 막는다.
@@ -628,7 +642,9 @@ app.post('/api/rebuild', (req, res) => {
     }
     if (isIndexing) {
         log.warn('Admin', '인덱스 재빌드 요청 — 이미 진행 중');
-        return res.status(409).json({ message: '인덱싱이 이미 진행 중입니다.' });
+        // [fix-13.D7] 프론트는 !res.ok 일 때 data.error를 읽는다. message로 주면
+        //   "오류가 발생했습니다"로 표시돼 진행 중이라는 사실이 전달되지 않는다.
+        return res.status(409).json({ error: '인덱싱이 이미 진행 중입니다.' });
     }
 
     log.info('Admin', '인덱스 재빌드 요청 — 수락');
@@ -699,6 +715,12 @@ function warmCache() {
                 for (const { keyword } of rows) {
                     if (Date.now() - wStart > WARM_CACHE_LIMIT_MS) {
                         log.warn('WarmCache', '시간 초과로 캐시 워밍 조기 종료');
+                        break;
+                    }
+                    // [fix-13.D5] 워밍이 예산을 다 쓰면 그 시각에 검색하던 교사가 429를 본다.
+                    //   사용자 몫을 남기고 물러난다. 남은 키워드는 다음 워밍이나 실검색이 채운다.
+                    if (!warmBudgetAvailable()) {
+                        log.warn('WarmCache', 'Drive 예산의 워밍 몫 소진 — 조기 종료');
                         break;
                     }
                     const tokens = tokenize(keyword);

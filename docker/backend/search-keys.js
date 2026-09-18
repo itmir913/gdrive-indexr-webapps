@@ -9,7 +9,9 @@
 const normKey = (s) => String(s ?? '').normalize('NFC').toLowerCase();
 
 // 캐시 키·keyword_log·검색이 모두 같은 형태를 쓰도록 단일 함수로 관리
-const normalizeKeyword = (kw) => normKey(kw).replace(/['"]/g, '').trim();
+// [fix-13.D6] ASCII 따옴표만 벗기면 한글 문서에서 복사한 `“논술”`이 그대로 키워드가 되어
+//   이름 매칭도 Drive 구문 검색도 0건이 된다. 둥근·전각 따옴표를 함께 제거한다.
+const normalizeKeyword = (kw) => normKey(kw).replace(/['"\u2018\u2019\u201C\u201D\uFF02\uFF07]/g, '').trim();
 
 // [fix-13.2] 모든 path는 루트 폴더 이름으로 시작한다. 그대로 매칭하면 루트 이름의
 //            부분 문자열(연도·학교명 등)이 전 파일에 걸리므로 루트 세그먼트를 뗀다.

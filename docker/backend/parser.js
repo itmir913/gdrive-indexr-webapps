@@ -2,6 +2,9 @@
 function tokenize(query) {
     query = query.replace(/\s{2,}/g, ' ').trim();
     if (!query) return [];
+    // [fix-13.D6] 한글 입력기의 전각 괄호를 ASCII로 정규화. 그대로 두면 괄호가
+    //   연산자 경계가 아니라 키워드의 일부가 된다.
+    query = query.replace(/（/g, '(').replace(/）/g, ')');
     query = query.replace(/\s*\b(and|or|not)\b\s*/gi, '|||$1|||');
     query = query.replace(/\s*([()])\s*/g, '|||$1|||');
 

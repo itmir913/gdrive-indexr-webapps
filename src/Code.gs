@@ -14,6 +14,10 @@ const REBUILD_FLAG_LOCK_MS = 10000;        // 플래그 test-and-set 동안만 �
 const REBUILD_STALE_MS    = 10 * 60 * 1000; // 이 시간이 지난 플래그는 비정상 종료로 보고 무시
 const ROOT_NAME_KEY       = 'ROOT_FOLDER_NAME';         // 현재 인덱스 기준 루트 폴더 이름
 const ROOT_NAME_PENDING   = 'ROOT_FOLDER_NAME_PENDING'; // 진행 중 재빌드가 관측한 루트 이름
+const QUEUE_KEY           = 'FOLDER_QUEUE';       // 이어하기 대기열 (청크 분할 저장)
+const QUEUE_CHUNK_SIZE    = 8000;                 // ScriptProperties 값 한도 9KB 대비 여유
+const QUEUE_MAX_CHARS     = 400000;               // 스크립트 전체 속성 한도(500KB) 대비 여유
+const REBUILD_ERROR_KEY   = 'REBUILD_HAD_ERROR';  // 세그먼트를 넘어 유지되는 탐색 실패 표시
 const MIN_KEYWORD_LENGTH  = 2;             // 서버측 최소 키워드 길이 (프론트 제한과 동일)
 // 검색식 오류 문구 — Docker search-pipeline.js와 반드시 같아야 한다 (대조 테스트가 검사)
 const ERR_QUERY           = '잘못된 검색식입니다. 괄호를 확인하세요.';
@@ -86,7 +90,60 @@ function _appendIndexRows(sheet, rows) {
   range.setValues(rows);
 }
 
+// 마지막 재빌드 실패 사유 — runAdminRebuild가 관리자에게 그대로 보여 준다
+var _rebuildFailureNote = '';
+
+// ── 이어하기 대기열 (ScriptProperties 청크 분할) ────────────────────────────
+// [fix-13.D1] 예전에는 남은 BFS 큐 전체를 한 속성에 JSON으로 넣었다. Apps Script의
+//   속성 값 한도는 9KB이고 한국어 경로를 가진 항목이 약 120바이트라 대기 폴더 75개쯤에서
+//   setProperty가 예외를 던졌다. 그 예외는 마지막 배치 기록과 트리거 생성 '앞'에서
+//   발생해 큐도 트리거도 남기지 않았고, 다음 날 02:00이 처음부터 시작해 같은 지점에서
+//   또 죽었다. 시트는 매일 비워지고 절반만 찬 채로 멈춘다.
+function _saveFolderQueue(props, queue) {
+  const json = JSON.stringify({ queue: queue, ts: Date.now() });
+  if (json.length > QUEUE_MAX_CHARS) {
+    throw new Error('대기열이 속성 저장 한도를 초과했습니다 (' + json.length + '자)');
+  }
+  const count = Math.ceil(json.length / QUEUE_CHUNK_SIZE) || 1;
+  _clearFolderQueue(props);   // 이전 저장의 잉여 청크 제거
+  const obj = {};
+  obj[QUEUE_KEY + '_n'] = String(count);
+  for (let i = 0; i < count; i++) {
+    obj[QUEUE_KEY + '_' + i] = json.substring(i * QUEUE_CHUNK_SIZE, (i + 1) * QUEUE_CHUNK_SIZE);
+  }
+  props.setProperties(obj, false);   // 다른 속성은 유지
+}
+
+function _loadFolderQueue(props) {
+  // 구버전(단일 키)으로 저장된 큐도 이어받는다
+  const legacy = props.getProperty(QUEUE_KEY);
+  if (legacy) {
+    try { return JSON.parse(legacy); } catch (e) { return null; }
+  }
+  const count = parseInt(props.getProperty(QUEUE_KEY + '_n'), 10) || 0;
+  if (!count) return null;
+  let json = '';
+  for (let i = 0; i < count; i++) {
+    const part = props.getProperty(QUEUE_KEY + '_' + i);
+    if (part === null) return null;   // 청크 유실 → 처음부터
+    json += part;
+  }
+  try { return JSON.parse(json); } catch (e) { return null; }
+}
+
+function _clearFolderQueue(props) {
+  const count = parseInt(props.getProperty(QUEUE_KEY + '_n'), 10) || 0;
+  props.deleteProperty(QUEUE_KEY);        // 구버전 단일 키
+  props.deleteProperty(QUEUE_KEY + '_n');
+  for (let i = 0; i < count; i++) props.deleteProperty(QUEUE_KEY + '_' + i);
+}
+
+function _hasFolderQueue(props) {
+  return !!(props.getProperty(QUEUE_KEY) || props.getProperty(QUEUE_KEY + '_n'));
+}
+
 function _rebuildMetadataIndexImpl() {
+  _rebuildFailureNote = '';
   const MAX_EXECUTION_TIME = 4 * 60 * 1000; // 4분 (안전하게 설정)
   const startTime = Date.now();
   const props = PropertiesService.getScriptProperties();
@@ -95,12 +152,12 @@ function _rebuildMetadataIndexImpl() {
   const sheet = ss.getSheetByName(FILE_INDEX_SHEET);
   if (!sheet) {
     Logger.log('[rebuildMetadataIndex] FileIndex 시트를 찾을 수 없습니다.');
+    _rebuildFailureNote = 'FileIndex 시트를 찾을 수 없습니다. 스프레드시트 설정을 확인하세요.';
     return 'error';
   }
 
   // 진행 상태(대기열) 불러오기
-  let queueStr = props.getProperty('FOLDER_QUEUE');
-  const parsedQueue = queueStr ? JSON.parse(queueStr) : null;
+  const parsedQueue = _loadFolderQueue(props);
   const isStaleQueue = parsedQueue && (Date.now() - (parsedQueue.ts || 0)) > 24 * 60 * 60 * 1000;
   let folderQueue = (!parsedQueue || isStaleQueue) ? null : parsedQueue.queue;
 
@@ -114,6 +171,7 @@ function _rebuildMetadataIndexImpl() {
     }
     sheet.getRange(1, 1, 1, 5).setValues([['fileId', '파일명', '폴더경로', 'URL', '수정일']]);
 
+    props.deleteProperty(REBUILD_ERROR_KEY);   // [fix-13.D4] 새 재빌드 — 실패 표시 초기화
     deleteTempTriggers();
   }
 
@@ -122,9 +180,19 @@ function _rebuildMetadataIndexImpl() {
   while (folderQueue.length > 0) {
     // 1. 실행 시간이 4분을 초과했는지 확인
     if (Date.now() - startTime > MAX_EXECUTION_TIME) {
-      props.setProperty('FOLDER_QUEUE', JSON.stringify({ queue: folderQueue, ts: Date.now() })); // 남은 폴더 저장
+      // [fix-13.D1] 순서 교정 — 모은 행을 먼저 기록한다. 대기열 저장이 실패해도
+      //   이번 세그먼트의 작업이 통째로 날아가지 않게.
       if (rows.length > 0) {
         _appendIndexRows(sheet, rows);
+      }
+      try {
+        _saveFolderQueue(props, folderQueue);
+      } catch (e) {
+        Logger.log('[재빌드] 대기열 저장 실패: ' + e.message);
+        _clearFolderQueue(props);
+        props.setProperty(REBUILD_ERROR_KEY, '대기열 저장 실패: ' + e.message);
+        _rebuildFailureNote = '대기열 저장 실패: ' + e.message;
+        return 'error';
       }
       // 1분 뒤 이어하기 트리거 생성
       ScriptApp.newTrigger('continueIndexing').timeBased().after(60 * 1000).create();
@@ -163,6 +231,10 @@ function _rebuildMetadataIndexImpl() {
         folderQueue.push({ id: subfolders.next().getId(), path: currentPath });
       }
     } catch (e) {
+      // [fix-13.D4] Docker판은 탐색 실패 시 인덱스를 교체하지 않는다. GAS는 시작 시
+      //   시트를 비우는 구조라 되돌릴 수 없지만, 최소한 'done'으로 보고하지는 않는다.
+      //   세그먼트를 넘어 유지돼야 하므로 속성에 남긴다.
+      props.setProperty(REBUILD_ERROR_KEY, `폴더 접근 오류 [${current.id}]: ${e.message}`);
       Logger.log(`폴더 접근 오류 [${current.id}]: ${e.message}`);
     }
   }
@@ -171,8 +243,24 @@ function _rebuildMetadataIndexImpl() {
   if (rows.length > 0) {
     _appendIndexRows(sheet, rows);
   }
-  props.deleteProperty('FOLDER_QUEUE');
+  _clearFolderQueue(props);
   deleteTempTriggers();
+
+  // [fix-13.D4] 탐색 중 한 건이라도 실패했으면 인덱스는 불완전하다. GAS는 시작 시
+  //   시트를 비우므로 되돌릴 수 없지만, 'done'으로 보고하면 관리자가 "성공했습니다!"를
+  //   보고 넘어간다. 사유를 남기고 'error'로 끝낸다.
+  const hadError = props.getProperty(REBUILD_ERROR_KEY);
+  if (hadError) {
+    props.deleteProperty(REBUILD_ERROR_KEY);
+    Logger.log('[재빌드] 탐색 중 오류가 있어 인덱스가 불완전합니다: ' + hadError);
+    _rebuildFailureNote = hadError;
+    return 'error';
+  }
+  if (sheet.getLastRow() < 2) {
+    Logger.log('[재빌드] 탐색 결과 0건 — FOLDER_ID와 폴더 접근 권한을 확인하세요.');
+    _rebuildFailureNote = '탐색 결과 0건 (FOLDER_ID·폴더 접근 권한 확인 필요)';
+    return 'error';
+  }
 
   // [fix-13.C4] 여기서 루트 이름을 승격한다. 아래 캐시 무효화와 같은 시점이라
   //   새 경로·새 루트 이름이 함께 보이기 시작한다.
@@ -374,8 +462,10 @@ function _normKey(s) {
 }
 
 // 캐시 키·KeywordLog·검색이 모두 같은 형태를 쓰도록 단일 함수로 관리
+// [fix-13.D6] ASCII 따옴표만 벗기면 한글 문서에서 복사한 `“논술”`이 그대로 키워드가
+//   되어 이름 매칭도 Drive 구문 검색도 0건이 된다. 둥근·전각 따옴표를 함께 제거한다.
 function _normalizeKeyword(kw) {
-  return _normKey(kw).replace(/['"]/g, '').trim();
+  return _normKey(kw).replace(/['"\u2018\u2019\u201C\u201D\uFF02\uFF07]/g, '').trim();
 }
 
 // [fix-13.B8] 순수 부정 질의 판정 — Docker의 `isPureNegative`와 동일한 규칙.
@@ -591,7 +681,7 @@ function continueIndexing() {
   //   아무것도 하지 않는다. 이 가드가 없으면, 아래 재예약과 다른 체인의 완료 처리가
   //   겹쳐 남은 고아 트리거가 rebuildMetadataIndex를 부르고, 큐가 없으니 '처음 실행'으로
   //   판정해 수업 시간에 시트를 비우고 전체 재색인을 시작한다.
-  if (!props.getProperty('FOLDER_QUEUE')) {
+  if (!_hasFolderQueue(props)) {
     deleteTempTriggers();
     Logger.log('[continueIndexing] 남은 큐 없음 — 종료');
     return;
@@ -601,7 +691,7 @@ function continueIndexing() {
 
   // [fix-13.8] 건너뛴 경우 재예약이 없으면 큐가 남은 채 다음 02:00까지 방치된다.
   //            큐가 아직 남아 있을 때만 다시 예약하고, 직전 트리거를 지워 1개로 유지한다.
-  if (result === 'skipped' && props.getProperty('FOLDER_QUEUE')) {
+  if (result === 'skipped' && _hasFolderQueue(props)) {
     deleteTempTriggers();
     ScriptApp.newTrigger('continueIndexing').timeBased().after(60 * 1000).create();
     Logger.log('[continueIndexing] 건너뜀 — 큐가 남아 1분 뒤 재시도 예약');
@@ -704,7 +794,8 @@ function runAdminRebuild(clientHash) {
     const status = rebuildMetadataIndex();
     if (status === 'done')      return '인덱스 갱신에 성공했습니다!';
     if (status === 'skipped')   return '다른 인덱싱 작업이 이미 실행 중입니다. 잠시 후 다시 시도하세요.';
-    if (status === 'error')     return 'FileIndex 시트를 찾을 수 없습니다. 스프레드시트 설정을 확인하세요.';
+    if (status === 'error')     return '인덱스 갱신에 실패했습니다: ' +
+                                       (_rebuildFailureNote || 'FileIndex 시트를 찾을 수 없습니다. 스프레드시트 설정을 확인하세요.');
     return '인덱스 갱신 진행 중입니다. 파일 수가 많아 백그라운드에서 이어하기가 실행됩니다 (약 1분 후 자동 완료).';
   } catch (e) {
     throw new Error('갱신 중 오류 발생: ' + e.message);
@@ -734,6 +825,8 @@ function tokenize(query) {
   // Step 1: 연속 공백 정규화
   query = query.replace(/\s{2,}/g, ' ').trim();
   if (!query) return [];
+  // [fix-13.D6] 한글 입력기의 전각 괄호를 ASCII로 정규화 (Docker parser.js와 동일)
+  query = query.replace(/（/g, '(').replace(/）/g, ')');
 
   // Step 2: 연산자·괄호 앞뒤에 구분자 삽입 후 분리
   query = query.replace(/\s*\b(and|or|not)\b\s*/gi, '|||$1|||');
