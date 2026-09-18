@@ -186,9 +186,16 @@ function getMeta(key) {
     });
 }
 
+// [fix-13.C2] 콜백 없는 db.run + 직후 db.get은 순서가 보장되지 않는다(기본 병렬 모드).
+//   쓰기 완료를 기다린 뒤 읽도록 Promise로 바꾼다. 실패해도 진행은 막지 않는다.
 function setMeta(key, value) {
-    db.run('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)', [key, String(value ?? '')],
-        (err) => { if (err) log.error('DB', `app_meta 저장 실패 [${key}]: ${err.message}`); });
+    return new Promise((resolve) => {
+        db.run('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)', [key, String(value ?? '')],
+            (err) => {
+                if (err) log.error('DB', `app_meta 저장 실패 [${key}]: ${err.message}`);
+                resolve();
+            });
+    });
 }
 
 // ── 메모리 캐시 로드 ─────────────────────────────────────────────────────────
@@ -215,7 +222,6 @@ async function loadIndexToMemory() {
 //   비어 있는 응답을 캐싱하면 일시적 장애가 6시간 고착된다.
 async function driveFullTextSearch(keyword) {
     if (!isAuthenticated()) return { ids: [], complete: false };
-    consumeDriveBudget();   // [fix-13.B6] 실제 Drive 호출만 예산을 소비한다
     const drive = getDriveClient();
     // [fix-B5] 큰따옴표도 이스케이프 추가 (이전: `"` 미처리로 Drive API 쿼리 malformed)
     const escaped = keyword.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
@@ -233,6 +239,9 @@ async function driveFullTextSearch(keyword) {
         };
         if (pageToken) params.pageToken = pageToken;
 
+        // [fix-13.C3] 페이지마다 소비한다. 함수 1회당 1로 세면 페이지네이션이
+        //   많은 키워드에서 실제 Drive 호출 수를 크게 과소평가한다.
+        consumeDriveBudget();
         const response = await withRetry(() => drive.files.list(params));
         (response.data.files || []).forEach(f => ids.push(f.id));
         pageToken = response.data.nextPageToken || null;
@@ -288,6 +297,9 @@ async function getFileIdsForKeyword(keyword) {
         log.info('Drive', `캐시 히트: [${keyword}] → [${cached.length}]건`);
         return cached;
     }
+
+    // [fix-13.C3] 여기서부터 Drive가 필요하다. 예산이 없으면 이 요청은 429다.
+    if (driveBudgetExhausted()) throw new DriveBudgetError();
 
     // [fix-13.9] Drive 응답을 기다리는 사이 인덱스가 교체되면 이 결과는 옛 인덱스 기준이다
     const generationAtStart = indexGeneration;
@@ -470,7 +482,7 @@ async function _runRebuild() {
             });
         });
 
-        setMeta('rootFolderName', rootName);   // [fix-13.B4]
+        await setMeta('rootFolderName', rootName);   // [fix-13.B4][fix-13.C2] 읽기 전에 완료 보장
         log.info('Index', `인덱싱 완료 → [${fileRows.length}]개 파일`);
         await loadIndexToMemory();
         return 'done';
@@ -563,21 +575,23 @@ function consumeDriveBudget() {
     driveWindowCalls++;
 }
 
-/** 이번 창의 예산이 소진됐는가 — 캐시로만 처리되는 요청은 여기 걸리지 않는다 */
+/** 이번 창의 예산이 소진됐는가 */
 function driveBudgetExhausted() {
     rollDriveWindow();
     return driveWindowCalls >= DRIVE_CALL_BUDGET;
+}
+
+// [fix-13.C3] 예산 초과는 '캐시 미스라 Drive가 필요한' 시점에만 판정한다.
+//   요청 진입부에서 막으면 캐시로 끝날 검색까지 429가 되는데, 그건 쿼터를 전혀
+//   보호하지 못하면서 정상 사용만 막는다.
+class DriveBudgetError extends Error {
+    constructor() { super('DRIVE_BUDGET_EXCEEDED'); this.code = 'DRIVE_BUDGET'; }
 }
 
 // ── 검색 API ─────────────────────────────────────────────────────────────────
 app.get('/api/search', async (req, res) => {
     const query = (req.query.q || '').trim();
     if (!query) return res.json([]);
-
-    if (driveBudgetExhausted()) {
-        log.warn('Search', `Drive 호출 예산 소진 — 요청 거부 [${query}]`);
-        return res.status(429).json({ error: '검색 요청이 많습니다. 잠시 후 다시 시도해 주세요.' });
-    }
 
     try {
         // [fix-13.B1] 흐름 자체는 search-pipeline.js에 있다. 여기는 I/O만 주입한다.
@@ -595,6 +609,11 @@ app.get('/api/search', async (req, res) => {
         log.info('Search', `[${query}] → [${out.results.length}]건`);
         res.json(out.results);
     } catch (e) {
+        // [fix-13.C3] Drive 예산 소진은 서버 오류가 아니라 일시적 거부다
+        if (e.code === 'DRIVE_BUDGET') {
+            log.warn('Search', `Drive 호출 예산 소진 — 요청 거부 [${query}]`);
+            return res.status(429).json({ error: '검색 요청이 많습니다. 잠시 후 다시 시도해 주세요.' });
+        }
         log.error('Search', `쿼리 처리 실패: ${e.message}`);
         res.status(500).json({ error: '검색 중 오류가 발생했습니다.' });
     }

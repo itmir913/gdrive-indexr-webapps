@@ -408,6 +408,8 @@
       <div class="status-row"><span>드라이브 인덱싱</span><span class="status-badge" id="statusIndex">조회 중...</span></div>
       <div class="status-row"><span>인덱싱된 파일 수</span><span class="status-badge" id="statusCount">-</span></div>
       <div class="status-row"><span>서버 업타임</span><span class="status-badge" id="statusUptime">-</span></div>
+      <div class="status-row"><span>마지막 인덱스 갱신</span><span class="status-badge" id="statusRebuild">-</span></div>
+      <div class="status-row"><span>마지막 Drive 오류</span><span class="status-badge" id="statusDriveErr">-</span></div>
     </div>
     <p style="font-size: 0.9rem; color: #5f6368; margin-bottom: 1rem;">
       비밀번호를 입력하면 Google 로그인 또는 인덱스 갱신을 실행할 수 있습니다.
@@ -461,7 +463,7 @@
     const text  = document.getElementById('healthText');
     fetch('/api/health')
       .then(res => res.json())
-      .then(({ authenticated, isIndexing, indexedCount, uptime }) => {
+      .then(({ status, authenticated, isIndexing, indexedCount, uptime }) => {
         if (!authenticated) {
           badge.className = 'health-err';
           text.textContent = '미인증 — 관리자 설정에서 Google 로그인 필요';
@@ -473,6 +475,11 @@
         if (isIndexing) {
           badge.className = 'health-warn';
           text.textContent = `인덱싱 중... (${indexedCount.toLocaleString()}개)`;
+        } else if (status === 'degraded') {
+          // [fix-13.C5] 서버가 degraded를 알려도 화면이 무시하면 노출한 의미가 없다.
+          //   refresh token 폐기·영구 403이면 인덱스는 멀쩡한 채 갱신만 멈춘다.
+          badge.className = 'health-warn';
+          text.textContent = `갱신 실패 · ${indexedCount.toLocaleString()}개 파일 (관리자 설정에서 확인)`;
         } else {
           badge.className = 'health-ok';
           text.textContent = `정상 · ${indexedCount.toLocaleString()}개 파일`;
@@ -637,7 +644,7 @@
   function loadServerStatus() {
     fetch('/api/health')
       .then(res => res.json())
-      .then(({ authenticated, isIndexing, indexedCount, uptime }) => {
+      .then(({ authenticated, isIndexing, indexedCount, uptime, lastRebuild, lastDriveError }) => {
         const authEl  = document.getElementById('statusAuth');
         const indexEl = document.getElementById('statusIndex');
         const countEl = document.getElementById('statusCount');
@@ -655,9 +662,32 @@
         const h = Math.floor(uptime / 3600), m = Math.floor((uptime % 3600) / 60);
         uptimeEl.textContent = h > 0 ? `${h}h ${m}m` : `${m}m`;
         uptimeEl.className   = 'status-badge ok';
+
+        // [fix-13.C5] 갱신이 조용히 멈춘 상태를 관리자가 화면에서 알 수 있게 한다
+        const rebuildEl  = document.getElementById('statusRebuild');
+        const driveErrEl = document.getElementById('statusDriveErr');
+        const rb = lastRebuild || {};
+        if (!rb.result) {
+          rebuildEl.textContent = '기록 없음';
+          rebuildEl.className   = 'status-badge';
+        } else {
+          rebuildEl.textContent = rb.result + (rb.at ? ' · ' + rb.at : '');
+          rebuildEl.className   = 'status-badge ' + (rb.result === 'done' ? 'ok' : 'err');
+          rebuildEl.title       = rb.message || '';
+        }
+        const de = lastDriveError || {};
+        if (!de.message) {
+          driveErrEl.textContent = '없음';
+          driveErrEl.className   = 'status-badge ok';
+        } else {
+          driveErrEl.textContent = de.at || '있음';
+          driveErrEl.className   = 'status-badge err';
+          driveErrEl.title       = de.message;
+        }
       })
       .catch(() => {
-        ['statusAuth', 'statusIndex', 'statusCount', 'statusUptime'].forEach(id => {
+        ['statusAuth', 'statusIndex', 'statusCount', 'statusUptime',
+         'statusRebuild', 'statusDriveErr'].forEach(id => {
           const el = document.getElementById(id);
           el.textContent = '조회 실패';
           el.className = 'status-badge err';

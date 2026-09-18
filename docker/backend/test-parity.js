@@ -163,6 +163,7 @@ function queriesFor(ROOT) {
         '(논술', '논술)', '(논술 OR 면접))', '서울대 (논술)',
         '', '   ', 'AND', 'NOT',
         '논술 NOT 존재하지않는키워드',
+        'NOT NOT 논술', 'NOT (NOT 논술)', 'NOT NOT NOT 논술',   // [fix-13.C1] 이중 부정
         '((논술))', '(((면접)))',
     ];
 }

@@ -33,7 +33,10 @@ const MIN_KEYWORD_LENGTH = 2;
 function isPureNegative(node) {
     if (!node || node.type === 'EMPTY') return false;
     if (node.type === 'KEYWORD') return false;
-    if (node.type === 'NOT') return true;
+    // [fix-13.C1] 이중 부정은 여집합의 여집합이라 다시 양성이다. `true`로 두면
+    //   `NOT NOT 논술`이 차단되는데, evaluate는 이를 `논술`과 같게 계산한다
+    //   (test-parser.js의 "NOT NOT 논술 = 논술" 케이스와 엔드포인트가 어긋났다).
+    if (node.type === 'NOT') return !isPureNegative(node.operand);
     if (node.type === 'AND') return isPureNegative(node.left) && isPureNegative(node.right);
     if (node.type === 'OR')  return isPureNegative(node.left) || isPureNegative(node.right);
     return false;

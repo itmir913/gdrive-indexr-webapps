@@ -12,7 +12,8 @@ const PRECACHE_TOP_N      = 100;           // warmCache 사전 워밍 대상 상
 const REBUILD_FLAG_KEY    = 'REBUILD_STARTED_AT';  // 재빌드 중복 실행 방지 플래그 (ScriptProperties)
 const REBUILD_FLAG_LOCK_MS = 10000;        // 플래그 test-and-set 동안만 잡는 짧은 잠금
 const REBUILD_STALE_MS    = 10 * 60 * 1000; // 이 시간이 지난 플래그는 비정상 종료로 보고 무시
-const ROOT_NAME_KEY       = 'ROOT_FOLDER_NAME'; // 색인 시점의 루트 폴더 이름 (경로 접두사 제거용)
+const ROOT_NAME_KEY       = 'ROOT_FOLDER_NAME';         // 현재 인덱스 기준 루트 폴더 이름
+const ROOT_NAME_PENDING   = 'ROOT_FOLDER_NAME_PENDING'; // 진행 중 재빌드가 관측한 루트 이름
 const MIN_KEYWORD_LENGTH  = 2;             // 서버측 최소 키워드 길이 (프론트 제한과 동일)
 // 검색식 오류 문구 — Docker search-pipeline.js와 반드시 같아야 한다 (대조 테스트가 검사)
 const ERR_QUERY           = '잘못된 검색식입니다. 괄호를 확인하세요.';
@@ -136,8 +137,12 @@ function _rebuildMetadataIndexImpl() {
     try {
       const folder = DriveApp.getFolderById(current.id);
       const currentPath = current.path ? current.path + '/' + folder.getName() : folder.getName();
-      // [fix-13.B4] 큐의 첫 항목이 루트다. 이름을 저장해 두면 경로에서 정확히 뗄 수 있다.
-      if (current.path === '') props.setProperty(ROOT_NAME_KEY, folder.getName());
+      // [fix-13.B4]  큐의 첫 항목이 루트다. 이름을 저장해 두면 경로에서 정확히 뗄 수 있다.
+      // [fix-13.C4] 단, 지금 쓰는 키에 바로 넣으면 안 된다. 메타 캐시(옛 경로)는 완료
+      //   시점까지 살아 있으므로, 루트 이름을 바꾼 뒤 갱신하는 동안 들어온 검색이
+      //   '옛 경로 + 새 루트 이름'을 맞춰 보게 되고 접두사가 어긋나 경로 전체가 매칭된다.
+      //   완료 시점에 승격한다.
+      if (current.path === '') props.setProperty(ROOT_NAME_PENDING, folder.getName());
       const files = folder.getFiles();
 
       while (files.hasNext()) {
@@ -168,6 +173,14 @@ function _rebuildMetadataIndexImpl() {
   }
   props.deleteProperty('FOLDER_QUEUE');
   deleteTempTriggers();
+
+  // [fix-13.C4] 여기서 루트 이름을 승격한다. 아래 캐시 무효화와 같은 시점이라
+  //   새 경로·새 루트 이름이 함께 보이기 시작한다.
+  const pendingRoot = props.getProperty(ROOT_NAME_PENDING);
+  if (pendingRoot) {
+    props.setProperty(ROOT_NAME_KEY, pendingRoot);
+    props.deleteProperty(ROOT_NAME_PENDING);
+  }
 
   // 인덱스 갱신 완료 → 메타데이터 캐시 및 키워드 캐시 무효화
   const cache = CacheService.getScriptCache();
@@ -372,7 +385,8 @@ function _normalizeKeyword(kw) {
 function _isPureNegative(node) {
   if (!node || node.type === 'EMPTY') return false;
   if (node.type === 'KEYWORD') return false;
-  if (node.type === 'NOT') return true;
+  // [fix-13.C1] 이중 부정은 여집합의 여집합이라 다시 양성이다 (Docker와 동일)
+  if (node.type === 'NOT') return !_isPureNegative(node.operand);
   if (node.type === 'AND') return _isPureNegative(node.left) && _isPureNegative(node.right);
   if (node.type === 'OR')  return _isPureNegative(node.left) || _isPureNegative(node.right);
   return false;
