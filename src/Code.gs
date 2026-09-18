@@ -215,15 +215,21 @@ function doSearch(query) {
     return { error: '잘못된 검색식입니다. 괄호를 확인하세요.' };
   }
 
+  // [fix-13.B7] AST 기준으로 키워드를 추출한다. 토큰 기준으로 뽑으면 파서가 EMPTY로
+  //   소비한 토큰까지 세어 Docker(`extractKeywords`)와 갈라진다.
+  const keywords = [...new Set(
+    [..._extractKeywords(tree)]
+      .map(function(t) { return _normalizeKeyword(t); })
+      .filter(function(t) { return t; })
+  )];
+
+  // [fix-13.B7] 키워드가 없는 질의(`NOT` 단독 등) 차단. 이 가드가 없으면
+  //   `NOT` → NOT(EMPTY) → difference(전체, 공집합) = 전체 파일 목록이 반환된다.
+  //   11차의 F16이 Docker에만 적용돼 있었고, 프론트 가드만으로는 서버가 보호되지 않는다.
+  if (keywords.length === 0) return [];
+
   // [fix-13.13] 로깅은 검색식 검증을 통과한 뒤에만. 이전에는 오타 질의의 키워드가
   //             KeywordLog에 들어가 warmCache가 그것으로 Drive를 검색했다.
-  // 로깅용 키워드 추출 (연산자·괄호 제외, 중복 제거, 캐시 키와 동일 정규화)
-  const OPERATORS = { AND: true, OR: true, NOT: true, '(': true, ')': true };
-  const keywords = [...new Set(
-    tokens.filter(function(t) { return !OPERATORS[t]; })
-         .map(function(t) { return _normalizeKeyword(t); })
-         .filter(function(t) { return t; })
-  )];
   try { logKeywords(keywords); } catch (e) { Logger.log('logKeywords error: ' + e.message); }
 
   const allIds    = getAllFileIds();
@@ -338,6 +344,14 @@ function _normKey(s) {
 // 캐시 키·KeywordLog·검색이 모두 같은 형태를 쓰도록 단일 함수로 관리
 function _normalizeKeyword(kw) {
   return _normKey(kw).replace(/['"]/g, '').trim();
+}
+
+// [fix-13.B7] AST에서 키워드 추출 — Docker의 search-pipeline.js `extractKeywords`와 동일
+function _extractKeywords(node) {
+  if (!node || node.type === 'EMPTY') return new Set();
+  if (node.type === 'KEYWORD') return new Set([node.value]);
+  if (node.type === 'NOT') return _extractKeywords(node.operand);
+  return new Set([..._extractKeywords(node.left), ..._extractKeywords(node.right)]);
 }
 
 // [fix-13.2] 모든 폴더경로는 루트 폴더 이름으로 시작하므로 그대로 매칭하면 루트 이름의
@@ -498,11 +512,23 @@ function getCachedMetadataMap() {
 
 // ── 이어하기 헬퍼 함수 ──────────────────────────────────────────────────────
 function continueIndexing() {
+  const props = PropertiesService.getScriptProperties();
+
+  // [fix-13.B3] 이어하기 트리거는 '이어하기'만 한다. 큐가 없으면 이미 끝난 것이므로
+  //   아무것도 하지 않는다. 이 가드가 없으면, 아래 재예약과 다른 체인의 완료 처리가
+  //   겹쳐 남은 고아 트리거가 rebuildMetadataIndex를 부르고, 큐가 없으니 '처음 실행'으로
+  //   판정해 수업 시간에 시트를 비우고 전체 재색인을 시작한다.
+  if (!props.getProperty('FOLDER_QUEUE')) {
+    deleteTempTriggers();
+    Logger.log('[continueIndexing] 남은 큐 없음 — 종료');
+    return;
+  }
+
   const result = rebuildMetadataIndex();
+
   // [fix-13.8] 건너뛴 경우 재예약이 없으면 큐가 남은 채 다음 02:00까지 방치된다.
-  //            남은 큐가 있을 때만 다시 예약하고, 직전 트리거를 지워 1개로 유지한다.
-  if (result === 'skipped' &&
-      PropertiesService.getScriptProperties().getProperty('FOLDER_QUEUE')) {
+  //            큐가 아직 남아 있을 때만 다시 예약하고, 직전 트리거를 지워 1개로 유지한다.
+  if (result === 'skipped' && props.getProperty('FOLDER_QUEUE')) {
     deleteTempTriggers();
     ScriptApp.newTrigger('continueIndexing').timeBased().after(60 * 1000).create();
     Logger.log('[continueIndexing] 건너뜀 — 큐가 남아 1분 뒤 재시도 예약');

@@ -6,8 +6,10 @@ const { google } = require('googleapis');
 const sqlite3 = require('sqlite3').verbose();
 const cron = require('node-cron');
 const crypto = require('crypto');
-const { BooleanParser, tokenize, evaluate } = require('./parser');
+const { runSearch } = require('./search-pipeline');
 const { normalizeKeyword, buildSearchIndex, matchKeyword } = require('./search-keys');
+const { tokenize, BooleanParser } = require('./parser');
+const { extractKeywords } = require('./search-pipeline');
 
 const app = express();
 app.use(express.json());
@@ -25,9 +27,12 @@ const CACHE_TTL_MS      = 6 * 60 * 60 * 1000;
 const WARM_CACHE_LIMIT_MS = 4 * 60 * 1000;
 const RETRY_COUNT       = 3;
 const RETRY_DELAY_MS    = 500;
-// [fix-13.14] 캐시 미스 키워드마다 Drive를 호출하므로 쿼터 보호용 전역 상한
-const SEARCH_RATE_LIMIT     = 60;           // 창당 허용 검색 요청 수
-const SEARCH_RATE_WINDOW_MS = 60 * 1000;
+// [fix-13.14] /api/search는 무인증이고 캐시 미스 키워드마다 Drive를 호출한다.
+// [fix-13.B6] 상한 대상은 '요청 수'가 아니라 'Drive 호출 수'다. 요청 수를 세면 캐시로만
+//             처리되는 정상 검색까지 막혀 회의 시간에 전원이 429를 본다.
+//             nginx 뒤라 클라이언트 IP가 구분되지 않아 전역으로 둔다.
+const DRIVE_CALL_BUDGET      = 200;         // 창당 허용 Drive API 호출 수
+const DRIVE_BUDGET_WINDOW_MS = 60 * 1000;
 
 const CREDENTIALS_PATH = '/app/data/credentials.json';
 const TOKEN_PATH       = '/app/data/token.json';
@@ -37,9 +42,16 @@ let fileIndexCache = new Map();
 let searchIndex = [];   // [{ id, nameKey, pathKey }] — 정규화된 검색 키 (응답에 포함되지 않음)
 let isIndexing = false;
 let isWarmingCache = false;
-// [fix-13.9] 인덱스 교체 세대. 재빌드 완료 시 증가하며, 진행 중 계산된 결과가
+// [fix-13.9] 인덱스 교체 세대. 재빌드 확정 시 증가하며, 진행 중 계산된 결과가
 //            교체 이후에 캐시로 기록되는 것을 막는다.
 let indexGeneration = 0;
+// [fix-13.B2] 3번(빈 인덱스 커밋 차단)과 4번(403에 토큰 삭제 안 함)을 함께 고친 결과,
+//             refresh token 폐기나 영구 403이 아무 흔적도 남기지 않게 됐다. 예전에는
+//             원인은 틀렸어도 "미인증"이 화면에 보였다. 마지막 재빌드 결과와 마지막
+//             Drive 오류를 health로 노출해 관리자가 알 수 있게 한다.
+let lastRebuild  = { at: null, result: null, message: null };
+let lastDriveError = { at: null, message: null };
+let rebuildNote = null;   // 이번 재빌드가 남긴 사유 (래퍼가 lastRebuild로 옮긴다)
 
 // ── 로거 ─────────────────────────────────────────────────────────────────────
 const ts = () => new Date().toLocaleString('sv-SE', { timeZone: TIMEZONE });
@@ -50,6 +62,10 @@ const log = {
     warn:  (tag, msg) => console.warn(`[${ts()}]\t[WARN ]\t[${tag.padEnd(9)}]\t${msg}`),
     error: (tag, msg) => console.error(`[${ts()}]\t[ERROR]\t[${tag.padEnd(9)}]\t${msg}`),
 };
+
+function noteDriveError(message) {
+    lastDriveError = { at: ts(), message: String(message ?? '').slice(0, 300) };
+}
 
 // ── DB 초기화 ────────────────────────────────────────────────────────────────
 // [fix-D] DDL에 트랜잭션 불필요 — serialize 큐 내 콜백에서 ROLLBACK이 COMMIT 이후 실행되는
@@ -172,6 +188,7 @@ function loadIndexToMemory() {
 // ── Drive 전체 텍스트 검색 ───────────────────────────────────────────────────
 async function driveFullTextSearch(keyword) {
     if (!isAuthenticated()) return [];
+    consumeDriveBudget();   // [fix-13.B6] 실제 Drive 호출만 예산을 소비한다
     const drive = getDriveClient();
     // [fix-B5] 큰따옴표도 이스케이프 추가 (이전: `"` 미처리로 Drive API 쿼리 malformed)
     const escaped = keyword.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
@@ -250,6 +267,7 @@ async function getFileIdsForKeyword(keyword) {
 
     const [driveIds, nameIds] = await Promise.all([
         driveFullTextSearch(keyword).catch(e => {
+            noteDriveError(`검색 실패 [${keyword}]: ${e.message}`);
             log.error('Drive', `검색 실패 [${keyword}]: ${e.message}`);
             return [];
         }),
@@ -265,18 +283,27 @@ async function getFileIdsForKeyword(keyword) {
     return combined;
 }
 
-// ── AST에서 키워드 추출 ──────────────────────────────────────────────────────
-function extractKeywords(node) {
-    if (!node || node.type === 'EMPTY') return new Set();
-    if (node.type === 'KEYWORD') return new Set([node.value]);
-    if (node.type === 'NOT') return extractKeywords(node.operand);
-    return new Set([...extractKeywords(node.left), ...extractKeywords(node.right)]);
+// ── 인덱스 재빌드 ────────────────────────────────────────────────────────────
+// [fix-13.B2] 실행 결과를 남겨 /api/health로 노출한다. 3·4번 수정 이후 인증 실패가
+//             화면에 아무 흔적도 남기지 않게 된 것을 보완한다.
+async function rebuildMetadataIndex() {
+    let result = 'error';
+    try {
+        result = await _runRebuild();
+        return result;
+    } catch (e) {
+        rebuildNote = e.message;
+        throw e;
+    } finally {
+        lastRebuild = { at: ts(), result, message: rebuildNote };
+        rebuildNote = null;
+    }
 }
 
-// ── 인덱스 재빌드 ────────────────────────────────────────────────────────────
-async function rebuildMetadataIndex() {
+async function _runRebuild() {
     if (!isAuthenticated()) {
         log.warn('Index', '인증되지 않음 — 인덱싱 건너뜀');
+        rebuildNote = '인증되지 않음 (token.json 없음 또는 만료)';
         return 'unauthenticated';
     }
     if (isIndexing) {
@@ -285,6 +312,7 @@ async function rebuildMetadataIndex() {
     }
     if (!FOLDER_ID) {
         log.error('Index', 'FOLDER_ID 환경변수 미설정');
+        rebuildNote = 'FOLDER_ID 환경변수 미설정';
         return 'error';
     }
 
@@ -313,6 +341,7 @@ async function rebuildMetadataIndex() {
             } catch (e) {
                 // 이름을 못 얻으면 하위 파일의 경로가 통째로 어긋나 경로 검색이 깨진다
                 traversalFailed = true;
+                noteDriveError(`폴더 이름 조회 실패 [${current.id}]: ${e.message}`);
                 log.error('Index', `폴더 이름 조회 실패 [${current.id}]: ${e.message}`);
             }
 
@@ -336,6 +365,7 @@ async function rebuildMetadataIndex() {
                     response = await withRetry(() => drive.files.list(params));
                 } catch (e) {
                     traversalFailed = true;
+                    noteDriveError(`파일 목록 조회 실패 [${current.id}]: ${e.message}`);
                     log.error('Index', `파일 목록 조회 실패 [${current.id}]: ${e.message}`);
                     break;
                 }
@@ -359,12 +389,20 @@ async function rebuildMetadataIndex() {
         //            네트워크 단절·쿼터·refresh token 폐기 어느 경우든 여기서 멈춘다.
         if (traversalFailed) {
             log.error('Index', '탐색 중 오류 발생 — 인덱스를 교체하지 않고 기존 인덱스를 유지합니다');
+            rebuildNote = '탐색 중 오류로 중단 — 기존 인덱스 유지 (Drive 접근 상태 확인 필요)';
             return 'error';
         }
         if (fileRows.length === 0) {
             log.error('Index', '탐색 결과가 0건 — 인덱스를 교체하지 않고 기존 인덱스를 유지합니다');
+            rebuildNote = '탐색 결과 0건 — 기존 인덱스 유지 (FOLDER_ID와 폴더 내용 확인 필요)';
             return 'error';
         }
+
+        // [fix-13.B5] 세대를 교체 '완료' 시점이 아니라 '확정' 시점에 올린다. 완료 시점에
+        //             올리면 DELETE~loadIndexToMemory 구간에 Drive 응답이 도착한 검색이
+        //             같은 세대로 판정돼 옛 인덱스 기준 결과를 6시간 캐싱했다.
+        //             롤백되면 불필요하게 캐시 저장을 한 번 건너뛸 뿐 손해는 없다.
+        indexGeneration++;
 
         await new Promise((resolve, reject) => {
             db.run('BEGIN TRANSACTION', (err) => {
@@ -399,10 +437,10 @@ async function rebuildMetadataIndex() {
 
         log.info('Index', `인덱싱 완료 → [${fileRows.length}]개 파일`);
         await loadIndexToMemory();
-        indexGeneration++;   // [fix-13.9] 교체 완료 — 진행 중이던 캐시 저장을 무효화
         return 'done';
     } catch (e) {
         log.error('Index', `인덱싱 중 오류 발생: ${e.message}`);
+        rebuildNote = e.message;
         return 'error';
     } finally {
         isIndexing = false;
@@ -471,21 +509,28 @@ app.get('/oauth/callback', async (req, res) => {
     }
 });
 
-// ── 검색 레이트 리밋 ─────────────────────────────────────────────────────────
-// [fix-13.14] /api/search는 무인증이고 캐시 미스 키워드마다 Drive를 호출한다.
-//             임의 키워드 반복 호출로 Drive 쿼터가 소진되는 것을 막는 전역 상한.
-//             nginx 뒤라 클라이언트 IP가 모두 같게 보일 수 있어 IP별이 아닌 전역으로 둔다.
-let searchWindowStart = Date.now();
-let searchWindowCount = 0;
+// ── Drive 호출 예산 ──────────────────────────────────────────────────────────
+let driveWindowStart = Date.now();
+let driveWindowCalls = 0;
 
-function searchRateLimitExceeded() {
+function rollDriveWindow() {
     const now = Date.now();
-    if (now - searchWindowStart > SEARCH_RATE_WINDOW_MS) {
-        searchWindowStart = now;
-        searchWindowCount = 0;
+    if (now - driveWindowStart > DRIVE_BUDGET_WINDOW_MS) {
+        driveWindowStart = now;
+        driveWindowCalls = 0;
     }
-    searchWindowCount++;
-    return searchWindowCount > SEARCH_RATE_LIMIT;
+}
+
+/** Drive 호출 1건 소비 — driveFullTextSearch에서만 부른다 */
+function consumeDriveBudget() {
+    rollDriveWindow();
+    driveWindowCalls++;
+}
+
+/** 이번 창의 예산이 소진됐는가 — 캐시로만 처리되는 요청은 여기 걸리지 않는다 */
+function driveBudgetExhausted() {
+    rollDriveWindow();
+    return driveWindowCalls >= DRIVE_CALL_BUDGET;
 }
 
 // ── 검색 API ─────────────────────────────────────────────────────────────────
@@ -493,44 +538,26 @@ app.get('/api/search', async (req, res) => {
     const query = (req.query.q || '').trim();
     if (!query) return res.json([]);
 
-    if (searchRateLimitExceeded()) {
-        log.warn('Search', `레이트 리밋 초과 — 요청 거부 [${query}]`);
+    if (driveBudgetExhausted()) {
+        log.warn('Search', `Drive 호출 예산 소진 — 요청 거부 [${query}]`);
         return res.status(429).json({ error: '검색 요청이 많습니다. 잠시 후 다시 시도해 주세요.' });
     }
 
     try {
-        const tokens = tokenize(query);
-        const parser = new BooleanParser(tokens);
-        const tree = parser.parse();
-        if (parser.pos < parser.tokens.length) {
-            return res.status(400).json({ error: '잘못된 검색식입니다. 괄호를 확인하세요.' });
-        }
-        const keywords = [...extractKeywords(tree)];
-        // [fix-F16] 키워드가 없는 쿼리(순수 연산자 등) 차단 — NOT(EMPTY)로 전체 파일 목록 노출 방지
-        if (keywords.length === 0) return res.json([]);
-
-        const fileIdArrays = await Promise.all(keywords.map(kw => getFileIdsForKeyword(kw)));
-
-        const keywordMap = new Map();
-        keywords.forEach((kw, i) => keywordMap.set(kw, new Set(fileIdArrays[i])));
-
-        const allIds = new Set(fileIndexCache.keys());
-        const resultSet = evaluate(tree, keywordMap, allIds);
-
-        const results = Array.from(resultSet)
-            .map(id => fileIndexCache.get(id))
-            .filter(Boolean)
-            .sort((a, b) => a.path.localeCompare(b.path, 'ko') || a.name.localeCompare(b.name, 'ko'));
-
-        log.info('Search', `[${query}] → [${results.length}]건`);
-        // [fix-13.12] 질의 문자열 전체가 아니라 개별 키워드를 기록한다.
-        //             전체를 기록하면 같은 키워드가 조합·대소문자별로 흩어져 count가
-        //             쪼개지고, PRECACHE_TOP_N 상위에서 인기 키워드가 빠진다.
-        keywords.forEach(kw => {
-            const norm = normalizeKeyword(kw);
-            if (norm) logKeyword(norm);
+        // [fix-13.B1] 흐름 자체는 search-pipeline.js에 있다. 여기는 I/O만 주입한다.
+        //             대조 테스트가 같은 함수를 호출하므로 사본이 갈라질 여지가 없다.
+        const out = await runSearch(query, {
+            resolveKeyword: getFileIdsForKeyword,
+            allIds: () => new Set(fileIndexCache.keys()),
+            lookup: (id) => fileIndexCache.get(id),
+            // [fix-13.12] 질의 문자열 전체가 아니라 개별 키워드를 기록한다.
+            logKeyword,
         });
-        res.json(results);
+
+        if (out.error) return res.status(400).json({ error: out.error });
+
+        log.info('Search', `[${query}] → [${out.results.length}]건`);
+        res.json(out.results);
     } catch (e) {
         log.error('Search', `쿼리 처리 실패: ${e.message}`);
         res.status(500).json({ error: '검색 중 오류가 발생했습니다.' });
@@ -557,12 +584,18 @@ app.post('/api/rebuild', (req, res) => {
 
 // ── 헬스체크 ─────────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
+    // [fix-13.B2] authenticated는 token.json의 refresh_token 존재만 본다. 토큰이 폐기됐거나
+    //             영구 403이어도 true다. 마지막 재빌드 결과와 마지막 Drive 오류를 함께 노출해
+    //             "인덱스는 멀쩡한데 갱신이 멈춰 있는" 상태를 관리자가 알 수 있게 한다.
+    const healthy = lastRebuild.result === null || lastRebuild.result === 'done';
     res.json({
-        status: 'ok',
+        status: healthy ? 'ok' : 'degraded',
         uptime: Math.floor(process.uptime()),
         authenticated: isAuthenticated(),
         isIndexing,
         indexedCount: fileIndexCache.size,
+        lastRebuild,
+        lastDriveError,
     });
 });
 
